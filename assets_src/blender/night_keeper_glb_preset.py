@@ -15,3 +15,5 @@ op.export_draco_normal_quantization = 10
 op.export_draco_texcoord_quantization = 12
 op.export_draco_color_quantization = 10
 op.export_draco_generic_quantization = 12
+op.export_image_format = 'JPEG'
+op.export_jpeg_quality = 85
