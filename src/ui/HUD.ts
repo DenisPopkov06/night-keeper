@@ -5,9 +5,12 @@ export interface HUDTask {
 
 export interface HUDState {
   flashlightChargePercent: number;
+  flashlightOn: boolean;
   remainingSec: number;
   tasks: HUDTask[];
 }
+
+const LOW_TIME_THRESHOLD_SEC = 30;
 
 function formatTime(seconds: number): string {
   const whole = Math.max(0, Math.ceil(seconds));
@@ -24,12 +27,15 @@ function serializeTasks(tasks: HUDTask[]): string {
 export class HUD {
   private readonly root: HTMLElement;
   private readonly flashlightBar: HTMLElement;
+  private readonly flashlightHint: HTMLElement;
   private readonly timerEl: HTMLElement;
   private readonly taskListEl: HTMLElement;
 
   private lastChargePercent = -1;
   private lastTimerText = "";
   private lastTasksSignature = "";
+  private lastIsLowTime = false;
+  private flashlightUsedOnce = false;
 
   constructor(parent: HTMLElement) {
     this.root = document.createElement("div");
@@ -41,18 +47,23 @@ export class HUD {
     this.flashlightBar.className = "hud__flashlight-bar";
     flashlight.appendChild(this.flashlightBar);
 
+    this.flashlightHint = document.createElement("div");
+    this.flashlightHint.className = "hud__hint";
+    this.flashlightHint.textContent = "F — фонарик";
+
     this.timerEl = document.createElement("div");
     this.timerEl.className = "hud__timer";
 
     this.taskListEl = document.createElement("ul");
     this.taskListEl.className = "hud__tasks";
 
-    this.root.append(flashlight, this.timerEl, this.taskListEl);
+    this.root.append(flashlight, this.flashlightHint, this.timerEl, this.taskListEl);
     parent.appendChild(this.root);
   }
 
   update(state: HUDState): void {
     this.setFlashlightCharge(state.flashlightChargePercent);
+    this.setFlashlightHint(state.flashlightOn);
     this.setTimeRemaining(state.remainingSec);
     this.setTaskList(state.tasks);
   }
@@ -62,6 +73,13 @@ export class HUD {
     if (rounded === this.lastChargePercent) return;
     this.lastChargePercent = rounded;
     this.flashlightBar.style.width = `${rounded}%`;
+  }
+
+  /** Подсказка клавиши видна, пока игрок ни разу не включил фонарик — он выключен
+   *  по умолчанию (решение дизайнера), без подсказки не всем очевидно, что делать. */
+  private setFlashlightHint(flashlightOn: boolean): void {
+    if (flashlightOn) this.flashlightUsedOnce = true;
+    this.flashlightHint.style.display = this.flashlightUsedOnce ? "none" : "";
   }
 
   private setTaskList(tasks: HUDTask[]): void {
@@ -90,9 +108,16 @@ export class HUD {
 
   private setTimeRemaining(seconds: number): void {
     const text = formatTime(seconds);
-    if (text === this.lastTimerText) return;
-    this.lastTimerText = text;
-    this.timerEl.textContent = text;
+    if (text !== this.lastTimerText) {
+      this.lastTimerText = text;
+      this.timerEl.textContent = text;
+    }
+
+    const isLowTime = seconds <= LOW_TIME_THRESHOLD_SEC;
+    if (isLowTime !== this.lastIsLowTime) {
+      this.lastIsLowTime = isLowTime;
+      this.timerEl.classList.toggle("hud__timer--low", isLowTime);
+    }
   }
 
   destroy(): void {

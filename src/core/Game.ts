@@ -132,6 +132,7 @@ export class Game {
 
     this.hud.update({
       flashlightChargePercent: this.flashlight.getChargePercent(),
+      flashlightOn: this.flashlight.isOn(),
       remainingSec: this.clock.getShiftRemainingSec(),
       tasks: this.buildHudTasks(),
     });
