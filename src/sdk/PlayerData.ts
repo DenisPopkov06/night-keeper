@@ -3,16 +3,23 @@ import type { SaveData } from "@/systems/SaveSystem";
 
 export async function loadCloudSave(): Promise<Partial<SaveData> | null> {
   if (!isRunningOnPlatform()) return null;
-  const ysdk = getYsdk() as { getPlayer(): Promise<{ getData(): Promise<Partial<SaveData>> }> };
-  const player = await ysdk.getPlayer();
-  return player.getData();
+
+  try {
+    const player = await getYsdk().getPlayer();
+    return (await player.getData()) as Partial<SaveData>;
+  } catch (error) {
+    console.error("[PlayerData] loadCloudSave failed", error);
+    return null;
+  }
 }
 
 export async function saveCloudSave(data: SaveData): Promise<void> {
   if (!isRunningOnPlatform()) return;
-  const ysdk = getYsdk() as {
-    getPlayer(): Promise<{ setData(data: SaveData): Promise<void> }>;
-  };
-  const player = await ysdk.getPlayer();
-  await player.setData(data);
+
+  try {
+    const player = await getYsdk().getPlayer();
+    await player.setData({ ...data });
+  } catch (error) {
+    console.error("[PlayerData] saveCloudSave failed", error);
+  }
 }
