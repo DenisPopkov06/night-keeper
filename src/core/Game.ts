@@ -9,6 +9,8 @@ import { InteractionSystem } from "@/systems/InteractionSystem";
 import { ObjectStateMachine } from "@/systems/ObjectStateMachine";
 import { ShiftManager, type ShiftEndReason } from "@/systems/ShiftManager";
 import { HintSystem } from "@/systems/HintSystem";
+import { SaveSystem } from "@/systems/SaveSystem";
+import { trackEvent } from "@/sdk/Analytics";
 
 export class Game {
   private readonly renderer: THREE.WebGLRenderer;
@@ -24,6 +26,7 @@ export class Game {
   private readonly stateMachine = new ObjectStateMachine();
   readonly shiftManager: ShiftManager;
   readonly hintSystem: HintSystem;
+  private readonly saveSystem = new SaveSystem();
 
   private running = false;
 
@@ -84,10 +87,19 @@ export class Game {
   }
 
   private onShiftEnd(reason: ShiftEndReason): void {
-    // TODO: показать ShiftReportScreen, отправить Analytics.trackEvent("shift_end", ...),
-    // показать Ads.showFullscreenAd перед следующей сменой — задачи 5.4/5.5
-    console.warn(`[Game] shift ended: ${reason}`);
     this.clock.pause();
+
+    const shiftIndex = this.shiftManager.getCurrentConfig()?.shiftIndex ?? 0;
+    trackEvent({ name: "shift_end", shiftIndex, reason });
+    void this.persistShiftProgress(shiftIndex);
+
+    // TODO: показать ShiftReportScreen + Ads.showFullscreenAd перед следующей сменой
+    // (кнопка "следующая смена" на экране итогов) — задача 5.5
+  }
+
+  private async persistShiftProgress(completedShiftIndex: number): Promise<void> {
+    const current = await this.saveSystem.load();
+    this.saveSystem.save({ ...current, shiftIndex: completedShiftIndex + 1 });
   }
 
   private onResize(): void {
