@@ -31,6 +31,10 @@
   <body>
     <canvas id="app-canvas"></canvas>
     <div id="ui-root"></div>
+    <!-- Yandex Games SDK v2: на площадке этот скрипт подставляется окружением,
+         но по документации его нужно подключать явно и для продакшен-сборки.
+         В dev-режиме (localhost) домен недоступен, YandexSDK.ts обрабатывает это сам. -->
+    <script src="https://yandex.ru/games/sdk/v2"></script>
     <script type="module" src="/src/main.ts"></script>
     <!-- Vite entry: index.html стоит в корне репозитория, т.к. этого требует сборщик;
          после vite build файл окажется в корне dist/, что и требуется для Яндекс Игр. -->
