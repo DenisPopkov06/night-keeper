@@ -1,3 +1,5 @@
+import { loadCloudSave, saveCloudSave } from "@/sdk/PlayerData";
+
 const STORAGE_KEY = "night-keeper:save";
 
 export interface SaveData {
@@ -9,7 +11,7 @@ export interface SaveData {
 const DEFAULT_SAVE: SaveData = { shiftIndex: 1, score: 0, soundVolume: 1 };
 
 export class SaveSystem {
-  load(): SaveData {
+  private loadLocal(): SaveData {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return { ...DEFAULT_SAVE };
     try {
@@ -19,8 +21,15 @@ export class SaveSystem {
     }
   }
 
+  /** localStorage отдаётся сразу же, облачное значение (если есть) переопределяет его сверху. */
+  async load(): Promise<SaveData> {
+    const local = this.loadLocal();
+    const cloud = await loadCloudSave();
+    return cloud ? { ...local, ...cloud } : local;
+  }
+
   save(data: SaveData): void {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
-    // TODO: синхронизация с PlayerData.ts (облако) — задача 5.4
+    void saveCloudSave(data);
   }
 }
