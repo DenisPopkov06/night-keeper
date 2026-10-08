@@ -17,6 +17,7 @@ import { showFullscreenAd } from "@/sdk/Ads";
 import { HUD, type HUDTask } from "@/ui/HUD";
 import { ShiftReportScreen } from "@/ui/ShiftReportScreen";
 import { PauseMenu } from "@/ui/PauseMenu";
+import { createPostProcessing, type PostProcessingPipeline } from "@/render/PostProcessing";
 
 export class Game {
   private readonly renderer: THREE.WebGLRenderer;
@@ -37,6 +38,7 @@ export class Game {
   private readonly hud: HUD;
   private readonly shiftReportScreen: ShiftReportScreen;
   private readonly pauseMenu: PauseMenu;
+  private readonly postProcessing: PostProcessingPipeline;
 
   private running = false;
   private currentShiftIndex = 1;
@@ -46,6 +48,9 @@ export class Game {
     uiRoot: HTMLElement,
   ) {
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+    this.renderer.shadowMap.enabled = true;
+    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+
     this.camera = new THREE.PerspectiveCamera(
       70,
       canvas.clientWidth / canvas.clientHeight,
@@ -55,6 +60,7 @@ export class Game {
     // Камера добавляется в сцену, чтобы прикреплённый к ней SpotLight (фонарик)
     // попадал в граф рендера — THREE обходит scene.children, а не камеру отдельно.
     this.sceneManager.scene.add(this.camera);
+    this.postProcessing = createPostProcessing(this.renderer, this.sceneManager.scene, this.camera);
 
     this.playerController = new PlayerController(this.camera, this.input);
     this.shiftManager = new ShiftManager(this.stateMachine, (reason) => this.onShiftEnd(reason));
@@ -99,7 +105,8 @@ export class Game {
 
     const delta = this.clock.tick(nowMs);
     this.update(delta);
-    this.renderer.render(this.sceneManager.scene, this.camera);
+    this.postProcessing.update(delta);
+    this.postProcessing.render();
 
     requestAnimationFrame(this.loop);
   };
@@ -194,6 +201,7 @@ export class Game {
   private onResize(): void {
     const { clientWidth, clientHeight } = this.canvas;
     this.renderer.setSize(clientWidth, clientHeight, false);
+    this.postProcessing.setSize(clientWidth, clientHeight);
     this.camera.aspect = clientWidth / clientHeight;
     this.camera.updateProjectionMatrix();
   }
