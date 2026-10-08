@@ -23,17 +23,21 @@
 //
 //   - материалы PBR (glTF metallic-roughness): в Blender — Principled BSDF
 //   - размер: квадрат, степень двойки; 1024×1024 по умолчанию на проп,
-//     2048×2048 — только для крупного (ограда, часовня, модель зоны)
+//     2048×2048 — только для крупного (ограда, часовня, модель зоны),
+//     512×512 — для мелочи (ваза, свеча, табличка)
 //   - один набор текстур (атлас) на проп; без текстур — просто цвет материала
 //   - карты, три штуки:
 //       albedo — цвет, sRGB (в Blender: Color Space = sRGB)
 //       normal — нормали в формате OpenGL (как в Blender), Color Space = Non-Color
 //       ORM    — одна карта на три параметра, Color Space = Non-Color:
 //                R = ambient occlusion, G = roughness, B = metalness
-//   - формат: PNG или JPG; в .glb встраиваются при экспорте (пресет night_keeper_glb)
-//   - исходники в высоком разрешении — assets_src/textures_src/, в билд не попадают;
+//   - формат: JPG (quality 85) — встраивается в .glb при экспорте (пресет night_keeper_glb);
+//     PNG слишком тяжёл для веба
+//   - запечённые карты — assets_src/textures_src/ (в билд не попадают);
 //     в public/textures/ — только текстуры, не упакованные в .glb
 //   - имя файла текстуры: <objectId>_albedo / _normal / _orm
+//   - у замкнутых мешей — одностороннее отображение (backface culling), без doubleSided
+//   - пропсы строит и запекает assets_src/blender/bake_props.py (тексты надписей — в словаре PROPS)
 
 import type { ObjectCatalogEntry } from "@/data/types";
 
