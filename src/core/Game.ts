@@ -165,6 +165,8 @@ export class Game {
       return;
     }
 
+    this.playerController.teleportTo(layout.spawnPoint);
+
     const config = getShiftConfig(this.currentShiftIndex, layout.zoneId, layout.objects);
     this.shiftManager.startShift(config);
     this.clock.startShiftTimer(config.timeLimitSec);
