@@ -1,0 +1,6 @@
+{
+  "zoneId": "new_cemetery",
+  "modelPath": "models/zone_new_cemetery.glb",
+  "spawnPoint": { "x": 0, "y": 0, "z": 0 },
+  "objects": []
+}

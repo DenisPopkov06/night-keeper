@@ -1,0 +1,30 @@
+{
+  "name": "night-keeper",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "test": "vitest",
+    "lint": "eslint src tests",
+    "format": "prettier --write \"src/**/*.{ts,css,html,json}\""
+  },
+  "dependencies": {
+    "three": "^0.186.1",
+    "howler": "^2.2.4"
+  },
+  "devDependencies": {
+    "typescript": "^6.0.3",
+    "vite": "^8.3.4",
+    "vitest": "^5.0.3",
+    "eslint": "^10.12.0",
+    "prettier": "^3.9.9",
+    "@types/three": "^0.186.0",
+    "@types/howler": "^2.2.13",
+    "@eslint/js": "^10.0.1",
+    "typescript-eslint": "^8.71.1",
+    "globals": "^17.13.0"
+  }
+}
