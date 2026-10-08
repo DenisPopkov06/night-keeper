@@ -1,0 +1,161 @@
+/* HUD: таймер сверху по центру, задачи слева сверху, заряд фонарика слева снизу, точка-прицел в центре.
+   Прицел рисуется псевдоэлементом — отдельной разметки не требует. */
+
+.hud {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  padding: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px)
+    env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px);
+}
+
+.hud::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 6px;
+  height: 6px;
+  margin: -3px 0 0 -3px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.6);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.5);
+}
+
+/* --- таймер --- */
+.hud__timer {
+  position: absolute;
+  top: calc(env(safe-area-inset-top, 0px) + var(--nk-pad));
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 0.12em 0.8em;
+  font-size: clamp(22px, 4.6vmin, 40px);
+  letter-spacing: 0.1em;
+  font-variant-numeric: tabular-nums;
+  background: var(--nk-bg);
+  border: 1px solid var(--nk-border);
+  border-radius: 999px;
+}
+
+/* Модификатор для «мало времени» — стиль готов, класс добавляет код (hud__timer--low). */
+.hud__timer--low {
+  color: var(--nk-danger);
+  border-color: #8a3a2e;
+  animation: nk-pulse 1s ease-in-out infinite;
+}
+
+/* --- список задач --- */
+.hud__tasks {
+  position: absolute;
+  top: calc(env(safe-area-inset-top, 0px) + var(--nk-pad));
+  left: calc(env(safe-area-inset-left, 0px) + var(--nk-pad));
+  max-width: min(44vw, 320px);
+  margin: 0;
+  padding: 0.7em 0.95em;
+  list-style: none;
+  background: var(--nk-bg);
+  border: 1px solid var(--nk-border);
+  border-radius: var(--nk-radius);
+}
+
+.hud__tasks:empty {
+  display: none;
+}
+
+/* Узкий портрет (телефон): список задач уходит под таймер, чтобы не налезать на него. */
+@media (max-width: 560px) {
+  .hud__tasks {
+    top: calc(env(safe-area-inset-top, 0px) + var(--nk-pad) + 3.4em);
+    max-width: min(72vw, 320px);
+  }
+}
+
+.hud__tasks::before {
+  content: "Задачи смены";
+  display: block;
+  margin-bottom: 0.45em;
+  font-size: clamp(10px, 1.7vmin, 12px);
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--nk-muted);
+}
+
+.hud__task-item {
+  display: flex;
+  align-items: center;
+  gap: 0.6em;
+  padding: 0.24em 0;
+  font-size: clamp(13px, 2.4vmin, 18px);
+  line-height: 1.25;
+}
+
+.hud__task-checkbox {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 1.2em;
+  height: 1.2em;
+  box-sizing: border-box;
+  font-size: 0.9em;
+  font-weight: bold;
+  line-height: 1;
+  color: var(--nk-bg-solid);
+  text-shadow: none;
+  border: 1.5px solid var(--nk-accent);
+  border-radius: 4px;
+}
+
+.hud__task-label {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.hud__task-item--done {
+  color: var(--nk-muted);
+}
+
+.hud__task-item--done .hud__task-checkbox {
+  background: var(--nk-ok);
+  border-color: var(--nk-ok);
+}
+
+.hud__task-item--done .hud__task-label {
+  text-decoration: line-through;
+  text-decoration-thickness: 1px;
+}
+
+/* --- заряд фонарика: полоса с иконкой слева; ширину заполнения задаёт код (style.width) --- */
+.hud__flashlight {
+  position: absolute;
+  left: calc(env(safe-area-inset-left, 0px) + var(--nk-pad) + 2.1em);
+  bottom: calc(env(safe-area-inset-bottom, 0px) + var(--nk-pad));
+  width: clamp(110px, 24vmin, 200px);
+  height: 14px;
+  box-sizing: border-box;
+  font-size: clamp(14px, 2.4vmin, 18px);
+  background: rgba(0, 0, 0, 0.6);
+  border: 1px solid var(--nk-border);
+  border-radius: 999px;
+}
+
+.hud__flashlight::before {
+  content: "";
+  position: absolute;
+  left: -1.9em;
+  top: 50%;
+  width: 1.4em;
+  height: 1.4em;
+  transform: translateY(-50%);
+  background: no-repeat center / contain
+    url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill='%23ffb54a' d='M8 2h8l-1.6 5H9.6z'/><path fill='%23ffb54a' fill-opacity='.85' d='M9.6 8h4.8l-.6 12.1a1 1 0 0 1-1 .9h-1.6a1 1 0 0 1-1-.9z'/></svg>");
+  filter: drop-shadow(0 0 4px var(--nk-accent-glow));
+}
+
+.hud__flashlight-bar {
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--nk-accent-strong), #ffd98a);
+  box-shadow: 0 0 10px var(--nk-accent-glow);
+  transition: width 0.25s linear;
+}
