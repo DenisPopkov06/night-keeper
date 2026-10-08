@@ -1,3 +1,4 @@
+import "@/ui/styles/index.css";
 import { initYandexSDK, getYsdk, isRunningOnPlatform } from "@/sdk/YandexSDK";
 import { Game } from "@/core/Game";
 import oldCemeteryLayout from "@/levels/zone_old_cemetery/layout.json";
