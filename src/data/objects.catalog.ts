@@ -41,6 +41,30 @@
 //   - зона: общие бесшовные тайлы tile_<имя>_albedo|normal|orm (трава, тропа, дерево, кора, камень) —
 //     повтор по мировым UV; строит assets_src/blender/zone_textures.py, геометрию — zone_lib.py
 
-import type { ObjectCatalogEntry } from "@/data/types";
+import { ObjectState, type ObjectCatalogEntry } from "@/data/types";
 
-export const OBJECTS_CATALOG: Record<string, ObjectCatalogEntry> = {};
+const GRAVESTONE_STATES = [ObjectState.DISPLACED, ObjectState.FALLEN, ObjectState.BROKEN];
+
+export const OBJECTS_CATALOG: Record<string, ObjectCatalogEntry> = {
+  gravestone_cross_a: {
+    modelPath: "models/props/gravestone_cross_a.glb",
+    interactable: true,
+    repairableStates: GRAVESTONE_STATES,
+  },
+  gravestone_arch_a: {
+    modelPath: "models/props/gravestone_arch_a.glb",
+    interactable: true,
+    repairableStates: GRAVESTONE_STATES,
+  },
+  gravestone_slab_a: {
+    modelPath: "models/props/gravestone_slab_a.glb",
+    interactable: true,
+    repairableStates: GRAVESTONE_STATES,
+  },
+  vase_clay_01: {
+    modelPath: "models/props/vase_clay_01.glb",
+    interactable: true,
+    repairableStates: [ObjectState.MISSING, ObjectState.DISPLACED],
+  },
+  // ...остальные объекты по мере добавления дизайнером
+};
