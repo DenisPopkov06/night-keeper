@@ -2,6 +2,8 @@ import * as THREE from "three";
 import type { ZoneLayout, PlacedObject } from "@/data/types";
 import { OBJECTS_CATALOG } from "@/data/objects.catalog";
 import { AssetLoader } from "@/core/AssetLoader";
+import { createAmbientFill, createMoonLight, createSceneFog } from "@/render/Lighting";
+import { createPlaceholderGround } from "@/render/MaterialsLib";
 
 function disposeObject(root: THREE.Object3D): void {
   root.traverse((node) => {
@@ -9,6 +11,15 @@ function disposeObject(root: THREE.Object3D): void {
       node.geometry.dispose();
       const materials = Array.isArray(node.material) ? node.material : [node.material];
       for (const material of materials) material.dispose();
+    }
+  });
+}
+
+function enableShadows(root: THREE.Object3D): void {
+  root.traverse((node) => {
+    if (node instanceof THREE.Mesh) {
+      node.castShadow = true;
+      node.receiveShadow = true;
     }
   });
 }
@@ -21,7 +32,10 @@ export class SceneManager {
   private currentLayout: ZoneLayout | null = null;
   private readonly interactableObjects: THREE.Object3D[] = [];
 
-  constructor(private readonly assetLoader: AssetLoader) {}
+  constructor(private readonly assetLoader: AssetLoader) {
+    this.scene.add(createAmbientFill(), createMoonLight());
+    this.scene.fog = createSceneFog();
+  }
 
   async loadZone(layout: ZoneLayout): Promise<void> {
     this.unloadCurrentZone();
@@ -31,11 +45,15 @@ export class SceneManager {
 
     try {
       const zoneGltf = await this.assetLoader.loadModel(layout.modelPath);
-      zoneRoot.add(zoneGltf.scene.clone(true));
+      const zoneScene = zoneGltf.scene.clone(true);
+      enableShadows(zoneScene);
+      zoneRoot.add(zoneScene);
     } catch (error) {
       // Контент приходит от дизайнера постепенно — отсутствующая/битая модель зоны
-      // не должна ронять весь игровой цикл, только оставлять зону без базовой геометрии.
+      // не должна ронять весь игровой цикл: оставляем плейсхолдер-землю вместо
+      // чёрной пустоты, пока дизайнер не выложит .glb.
       console.warn(`[SceneManager] не удалось загрузить модель зоны "${layout.modelPath}"`, error);
+      zoneRoot.add(createPlaceholderGround());
     }
 
     await Promise.all(
@@ -64,6 +82,7 @@ export class SceneManager {
     }
 
     const instance = gltf.scene.clone(true);
+    enableShadows(instance);
     instance.position.set(placed.position.x, placed.position.y, placed.position.z);
     instance.rotation.y = THREE.MathUtils.degToRad(placed.rotationY);
     instance.userData.instanceId = placed.instanceId;

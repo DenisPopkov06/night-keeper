@@ -22,3 +22,15 @@ export const MaterialsLib = {
   grass: (): THREE.Material =>
     getOrCreate("grass", () => new THREE.MeshStandardMaterial({ color: 0x3c4a2f, roughness: 1 })),
 };
+
+/**
+ * Плейсхолдер-земля на случай, если модель зоны ещё не готова/не загрузилась —
+ * чтобы зона не оставалась чёрной пустотой, пока дизайнер не выложил .glb.
+ */
+export function createPlaceholderGround(size = 40): THREE.Mesh {
+  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(size, size), MaterialsLib.grass());
+  mesh.rotation.x = -Math.PI / 2;
+  mesh.receiveShadow = true;
+  mesh.name = "placeholder-ground";
+  return mesh;
+}
