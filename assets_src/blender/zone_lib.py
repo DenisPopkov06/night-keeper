@@ -138,10 +138,13 @@ def collection():
 def clear(*prefixes):
     for o in list(bpy.data.objects):
         if any(o.name.startswith(p) for p in prefixes):
-            me = o.data
+            data, kind = o.data, o.type
             bpy.data.objects.remove(o, do_unlink=True)
-            if me is not None and me.users == 0:
-                bpy.data.meshes.remove(me)
+            if data is not None and data.users == 0:
+                if kind == "MESH":
+                    bpy.data.meshes.remove(data)
+                elif kind == "LIGHT":
+                    bpy.data.lights.remove(data)
 
 
 def _faces_of(verts):
@@ -592,6 +595,24 @@ def build_lamp(M=None):
     return {"lamp_post_a": t, "light_at_blender": (3.5 + lx, -10.0, 2.82)}
 
 
+LANTERN_POS = (2.5, -10.0, 2.82)       # Blender; в glTF = (2.5, 2.82, 10)
+LANTERN_COLOR = (1.0, 0.55, 0.22)       # тёплый свет свечи/масляной лампы
+LANTERN_POWER = 65.0                    # в экспорте RAW это число = PointLight.intensity в three.js (без пересчёта в канделы)
+
+
+def build_lantern_light():
+    """Тёплый точечный свет в фонаре. Уходит в .glb как KHR_lights_punctual — игра создаёт PointLight сама."""
+    clear("lantern_light_")
+    data = bpy.data.lights.get("lantern_light_a") or bpy.data.lights.new("lantern_light_a", "POINT")
+    data.color = LANTERN_COLOR
+    data.energy = LANTERN_POWER
+    data.shadow_soft_size = 0.08
+    obj = bpy.data.objects.new("lantern_light_a", data)
+    obj.location = LANTERN_POS
+    collection().objects.link(obj)
+    return {"lantern_light_a": LANTERN_POS, "intensity": LANTERN_POWER}
+
+
 def build_bench(M=None):
     """Скамья: сиденье из трёх досок, спинка из двух, боковые рамы."""
     M = M or mats()
@@ -754,7 +775,7 @@ def build_twigs(M=None):
 
 
 STEPS = [build_ground, build_path_stones, build_mounds, build_fence, build_gate, build_trees, build_lamp,
-         build_bench, build_grass, build_flowers, build_rocks, build_twigs]
+         build_lantern_light, build_bench, build_grass, build_flowers, build_rocks, build_twigs]
 
 
 def build_all():
@@ -781,5 +802,8 @@ def export_zone():
     props = bpy.ops.export_scene.gltf.get_rna_type().properties
     if "export_vertex_color" in props.keys():
         s["export_vertex_color"] = "MATERIAL"
+    s["export_lights"] = True        # свет фонаря едет в .glb (в общем пресете света нет — у пропсов его нет)
+    if "export_import_convert_lighting_mode" in props.keys():
+        s["export_import_convert_lighting_mode"] = "RAW"   # без пересчёта Вт→кд: значение в Blender = intensity в игре
     bpy.ops.export_scene.gltf(filepath=OUT_GLB, **s)
     return os.path.getsize(OUT_GLB) // 1024
