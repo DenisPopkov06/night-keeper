@@ -1,4 +1,4 @@
-import { initYandexSDK } from "@/sdk/YandexSDK";
+import { initYandexSDK, getYsdk, isRunningOnPlatform } from "@/sdk/YandexSDK";
 import { Game } from "@/core/Game";
 
 async function bootstrap(): Promise<void> {
@@ -10,7 +10,15 @@ async function bootstrap(): Promise<void> {
   const game = new Game(canvas);
   game.start();
 
-  // TODO: ysdk.features.LoadingAPI.ready() после первого кадра — задача 5.4/5.6
+  // LoadingAPI.ready() обязателен сразу после первого отрендеренного кадра,
+  // иначе прогресс-бар загрузки площадки не скрывается. requestAnimationFrame
+  // внутри requestAnimationFrame гарантирует, что кадр из game.start() уже
+  // не просто поставлен в очередь, а реально отрисован браузером.
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      if (isRunningOnPlatform()) getYsdk().features.LoadingAPI?.ready();
+    });
+  });
 }
 
 void bootstrap();
