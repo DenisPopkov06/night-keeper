@@ -5,9 +5,9 @@ import { ShaderPass } from "three/examples/jsm/postprocessing/ShaderPass.js";
 import { OutputPass } from "three/examples/jsm/postprocessing/OutputPass.js";
 
 export const POST_PROCESSING_CONFIG = {
-  vignetteIntensity: 0.35,
+  vignetteIntensity: 0.3,
   vignetteRadius: 0.7,
-  filmGrainIntensity: 0.05,
+  filmGrainIntensity: 0.025,
   colorGradeSaturation: 0.9,
 };
 
@@ -51,9 +51,16 @@ const vignetteGrainShader = {
       float vignette = smoothstep(vignetteRadius, vignetteRadius - 0.35, dist);
       vignette = mix(1.0 - vignetteIntensity, 1.0, vignette);
 
-      float grain = (random(vUv * time) - 0.5) * grainIntensity;
+      vec3 result = graded * vignette;
 
-      gl_FragColor = vec4(graded * vignette + grain, texel.a);
+      // Маскируем зерно по яркости — иначе на тёмных (ночных) кадрах аддитивный
+      // шум после sRGB-кодирования визуально "взрывается" в сплошные помехи,
+      // в то время как на светлых участках то же самое значение почти незаметно.
+      float luma = dot(result, vec3(0.299, 0.587, 0.114));
+      float grainMask = mix(0.2, 1.0, clamp(luma * 3.0, 0.0, 1.0));
+      float grain = (random(vUv * time) - 0.5) * grainIntensity * grainMask;
+
+      gl_FragColor = vec4(result + grain, texel.a);
     }
   `,
 };
