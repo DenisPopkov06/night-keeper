@@ -1,6 +1,7 @@
 import { initYandexSDK, getYsdk, isRunningOnPlatform } from "@/sdk/YandexSDK";
 import { Game } from "@/core/Game";
 import oldCemeteryLayout from "@/levels/zone_old_cemetery/layout.json";
+import type { ZoneLayout } from "@/data/types";
 
 async function bootstrap(): Promise<void> {
   await initYandexSDK();
@@ -25,7 +26,8 @@ async function bootstrap(): Promise<void> {
 
   // Пока это единственная зона с контентом — выбор стартовой зоны (меню/прогресс)
   // не входит в текущий объём задач.
-  await game.beginFirstShift(oldCemeteryLayout);
+  // JSON даёт defaultState как string — приводим к ZoneLayout (корректность значений проверяет tests/layouts.test.ts).
+  await game.beginFirstShift(oldCemeteryLayout as ZoneLayout);
 }
 
 void bootstrap();
