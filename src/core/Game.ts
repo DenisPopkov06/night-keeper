@@ -6,6 +6,9 @@ import { SceneManager } from "@/core/SceneManager";
 import { PlayerController } from "@/systems/PlayerController";
 import { FlashlightSystem } from "@/systems/FlashlightSystem";
 import { InteractionSystem } from "@/systems/InteractionSystem";
+import { ObjectStateMachine } from "@/systems/ObjectStateMachine";
+import { ShiftManager, type ShiftEndReason } from "@/systems/ShiftManager";
+import { HintSystem } from "@/systems/HintSystem";
 
 export class Game {
   private readonly renderer: THREE.WebGLRenderer;
@@ -18,6 +21,9 @@ export class Game {
   private readonly playerController: PlayerController;
   readonly flashlight = new FlashlightSystem();
   private readonly interaction: InteractionSystem;
+  private readonly stateMachine = new ObjectStateMachine();
+  readonly shiftManager: ShiftManager;
+  readonly hintSystem: HintSystem;
 
   private running = false;
 
@@ -34,7 +40,9 @@ export class Game {
     this.sceneManager.scene.add(this.camera);
 
     this.playerController = new PlayerController(this.camera, this.input);
-    this.interaction = new InteractionSystem(this.camera);
+    this.shiftManager = new ShiftManager(this.stateMachine, (reason) => this.onShiftEnd(reason));
+    this.interaction = new InteractionSystem(this.camera, this.stateMachine, this.shiftManager);
+    this.hintSystem = new HintSystem(this.sceneManager.scene);
     this.flashlight.attachToCamera(this.camera);
 
     this.input.attach(canvas);
@@ -65,10 +73,21 @@ export class Game {
   private update(deltaSec: number): void {
     this.playerController.update(deltaSec);
     this.flashlight.update(deltaSec);
-    this.interaction.update(this.sceneManager.getInteractableObjects());
+    this.hintSystem.update(deltaSec);
+
+    const holdingInteract = this.input.isKeyDown("KeyE");
+    this.interaction.update(this.sceneManager.getInteractableObjects(), holdingInteract, deltaSec);
+    this.shiftManager.update(this.clock.getShiftRemainingSec());
 
     if (this.input.consumeKeyPress("KeyF")) this.flashlight.toggle();
     if (this.input.consumeKeyPress("KeyE")) this.interaction.interact();
+  }
+
+  private onShiftEnd(reason: ShiftEndReason): void {
+    // TODO: показать ShiftReportScreen, отправить Analytics.trackEvent("shift_end", ...),
+    // показать Ads.showFullscreenAd перед следующей сменой — задачи 5.4/5.5
+    console.warn(`[Game] shift ended: ${reason}`);
+    this.clock.pause();
   }
 
   private onResize(): void {
