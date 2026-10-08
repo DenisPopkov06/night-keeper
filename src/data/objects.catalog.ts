@@ -38,6 +38,8 @@
 //   - имя файла текстуры: <objectId>_albedo / _normal / _orm
 //   - у замкнутых мешей — одностороннее отображение (backface culling), без doubleSided
 //   - пропсы строит и запекает assets_src/blender/bake_props.py (тексты надписей — в словаре PROPS)
+//   - зона: общие бесшовные тайлы tile_<имя>_albedo|normal|orm (трава, тропа, дерево, кора, камень) —
+//     повтор по мировым UV; строит assets_src/blender/zone_textures.py, геометрию — zone_lib.py
 
 import type { ObjectCatalogEntry } from "@/data/types";
 

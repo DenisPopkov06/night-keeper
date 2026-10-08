@@ -26,3 +26,7 @@ Thumbs.db
 
 # Photoshop: временные файлы
 ~*.psd
+
+# Python (скрипты Blender)
+__pycache__/
+*.pyc
