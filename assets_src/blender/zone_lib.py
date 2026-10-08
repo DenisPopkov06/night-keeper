@@ -1,5 +1,7 @@
 """Зона «Старое кладбище»: детальная геометрия по шагам (build_ground(), build_fence(), ...).
 
+Земля и тропы — ОДНА уникальная текстура на всю зону (zone_textures.ground_unique): без тайлов и повторов.
+
 Вызывается из окна Blender (через MCP) по одному шагу — прогресс виден вживую — и целиком
 через build_all(). Все меши строятся в мировых координатах, origin объектов = (0, 0, 0).
 Бесшовные текстуры (tile_*, sign_gate_a) создаёт zone_textures.py.
@@ -12,6 +14,7 @@ import os
 import random
 import re
 import ast
+import json
 
 import bmesh
 import bpy
@@ -113,8 +116,7 @@ def flat_material(name, rgb=(1, 1, 1), rough=0.8, metal=0.0, emission=None, cull
 def mats(force=False):
     """Все материалы зоны. Уже созданные переиспользуются (иначе у готовых мешей слетают слоты)."""
     spec = {
-        "grass": ("mat_tile_grass", lambda n: tile_material(n, "tile_grass", vcolor=True)),
-        "path": ("mat_tile_path", lambda n: tile_material(n, "tile_path")),
+        "ground": ("mat_ground_old_cemetery", lambda n: tile_material(n, "ground_old_cemetery")),
         "wood": ("mat_tile_wood", lambda n: tile_material(n, "tile_wood")),
         "bark": ("mat_tile_bark", lambda n: tile_material(n, "tile_bark")),
         "stone": ("mat_tile_stone", lambda n: tile_material(n, "tile_stone")),
@@ -259,93 +261,135 @@ def focus(center=(0, 0, 0), dist=60, yaw=-28, pitch=58):
 
 
 # ============================================================================ шаги
+LAYOUT = os.path.join(REPO, "src", "levels", "zone_old_cemetery", "layout.json")
+# препятствия (Blender x, y, радиус свободной зоны, м): фонарь, скамья, деревья, воротные столбы
+OBSTACLES = [(3.5, -10.0, 0.9), (-4.5, -6.0, 1.3), (-11.0, 8.0, 0.8), (12.0, -7.0, 0.8), (13.0, 13.0, 0.7),
+             (-GATE_X, -ZONE, 0.9), (GATE_X, -ZONE, 0.9)]
+
+
+def _smooth(a, b, x):
+    t = min(max((x - a) / (b - a), 0.0), 1.0)
+    return t * t * (3 - 2 * t)
+
+
+def layout_objects():
+    return json.load(open(LAYOUT, encoding="utf-8"))["objects"]
+
+
+def graves():
+    """Надгробия из layout.json в координатах Blender: (x, y, направление «лица» fx, fy)."""
+    out = []
+    for o in layout_objects():
+        if o["objectId"].startswith("gravestone"):
+            a = math.radians(o["rotationY"])
+            out.append((o["position"]["x"], -o["position"]["z"], math.sin(a), -math.cos(a)))
+    return out
+
+
+def path_sd(x, y):
+    """Приближённое расстояние (м) до тропы, <0 внутри. Формулы те же, что в zone_textures.ground_unique."""
+    i = (y + 19.6) / 0.6
+    xc = 0.4 * math.sin(i * 0.35)
+    w = (2.5 + 0.25 * math.sin(i * 0.5)) * (1 - 0.9 * _smooth(46, 60, i))
+    sd_main = 9.0 if (i < -1 or i > 61) else abs(x - xc) - w / 2
+    j = (x + 12) / 0.6
+    yc = 4 + 0.3 * math.sin(j * 0.4)
+    wc = max(2.0 * min(j / 4, (40 - j) / 4 + 0.15, 1.0) + 0.25, 0)
+    sd_cross = 9.0 if (j < -1 or j > 41) else abs(y - yc) - wc / 2
+    return min(sd_main, sd_cross)
+
+
+def blocked(x, y, grave_r=1.3, path_margin=0.5, gs=None):
+    """Занято ли место: тропа, надгробие/холмик, дерево, фонарь, скамья, ограда."""
+    if abs(x) > 18.6 or abs(y) > 18.6 or path_sd(x, y) < path_margin:
+        return True
+    if any(math.hypot(x - ox, y - oy) < r for ox, oy, r in OBSTACLES):
+        return True
+    for gx, gy, fx, fy in (gs if gs is not None else graves()):
+        if math.hypot(x - gx, y - gy) < grave_r or math.hypot(x - (gx + fx * 1.05), y - (gy + fy * 1.05)) < grave_r:
+            return True
+    return False
+
+
 def build_ground(M=None):
-    """Земля 40×40: сетка 2 м, трава (tile 6 м), вертексные цвета ломают повтор текстуры."""
+    """Земля 40×40: плоская сетка 2 м; UV = мировые координаты на ВСЮ зону → одна уникальная текстура, без повторов."""
     M = M or mats()
-    clear("ground_")
-    rnd = random.Random(3)
+    clear("ground_", "path_main_", "path_cross_")
     bm = bmesh.new()
     n = 20
     grid = [[bm.verts.new((-HALF + 2 * i, -HALF + 2 * j, 0.0)) for j in range(n + 1)] for i in range(n + 1)]
-    faces = []
-    for i in range(n):
-        for j in range(n):
-            faces.append(bm.faces.new((grid[i][j], grid[i + 1][j], grid[i + 1][j + 1], grid[i][j + 1])))
+    faces = [bm.faces.new((grid[i][j], grid[i + 1][j], grid[i + 1][j + 1], grid[i][j + 1]))
+             for i in range(n) for j in range(n)]
     bmesh.ops.recalc_face_normals(bm, faces=faces)
-    box_uv(faces, bm, tile=6.0)
-    lay = bm.loops.layers.float_color.new("Color")
-    for f in faces:
-        for lp in f.loops:
-            x, y, _ = lp.vert.co
-            # плавное макро-варьирование (без случайности на вершину — иначе видна клетчатость сетки)
-            v = (0.88 + 0.10 * math.sin(x * 0.19 + 1.3) * math.cos(y * 0.15 + 0.4)
-                 + 0.07 * math.sin(x * 0.071 + y * 0.113 + 2.0) + 0.05 * math.cos(x * 0.31 - y * 0.27))
-            edge = min(1.0, (HALF - max(abs(x), abs(y))) / 6.0)      # к краю темнее
-            k = max(0.40, v * (0.65 + 0.35 * edge))
-            warm = 0.5 + 0.5 * math.sin(x * 0.11 - y * 0.09 + 0.7)   # где-то суше, где-то зеленее
-            lp[lay] = (k * (0.95 + 0.12 * warm), k, k * (0.90 - 0.05 * warm), 1.0)
-    for f in faces:
-        f.material_index = 0
-    o, t = finish("ground_old_cemetery", bm, [M["grass"]])
-    return {"ground": t}
-
-
-def _strip(name, pts, widths, z, mat, tile, seed):
-    """Лента тропы по ломаной с неровными краями."""
-    rnd = random.Random(seed)
-    bm = bmesh.new()
-    rows = []
-    for i, (p, w) in enumerate(zip(pts, widths)):
-        a, b = pts[max(i - 1, 0)], pts[min(i + 1, len(pts) - 1)]
-        d = Vector((b[0] - a[0], b[1] - a[1], 0)).normalized()
-        nrm = Vector((-d.y, d.x, 0))
-        jl, jr = rnd.uniform(-0.22, 0.22), rnd.uniform(-0.22, 0.22)
-        c = Vector((p[0], p[1], z))
-        rows.append((bm.verts.new(c + nrm * (w / 2 + jl)), bm.verts.new(c - nrm * (w / 2 + jr))))
-    faces = [bm.faces.new((rows[i][0], rows[i][1], rows[i + 1][1], rows[i + 1][0])) for i in range(len(rows) - 1)]
-    bmesh.ops.recalc_face_normals(bm, faces=faces)
+    uv = bm.loops.layers.uv.verify()
     for f in faces:
         if f.normal.z < 0:
             f.normal_flip()
-    box_uv(faces, bm, tile=tile)
-    return finish(name, bm, [mat])
+        f.material_index = 0
+        for lp in f.loops:
+            x, y, _ = lp.vert.co
+            lp[uv].uv = ((x + HALF) / (2 * HALF), (y + HALF) / (2 * HALF))
+    _, t = finish("ground_old_cemetery", bm, [M["ground"]])
+    return {"ground": t}
 
 
-def build_paths(M=None):
-    """Тропы: главная от ворот на север и поперечная; края неровные, чуть выше травы."""
-    M = M or mats()
-    clear("path_main_", "path_cross_")
-    main_pts = [(0.4 * math.sin(i * 0.35), -HALF + 0.4 + i * 0.6) for i in range(61)]
-    main_w = [2.5 + 0.25 * math.sin(i * 0.5) - (0.7 * max(0, i - 54) / 6) for i in range(61)]
-    _, t1 = _strip("path_main_01", main_pts, main_w, 0.02, M["path"], 2.0, 1)
-    cross_pts = [(-12 + i * 0.6, 4.0 + 0.3 * math.sin(i * 0.4)) for i in range(41)]
-    cross_w = [2.0 * min(1.0, i / 4, (40 - i) / 4 + 0.15) + 0.25 for i in range(41)]
-    _, t2 = _strip("path_cross_01", cross_pts, cross_w, 0.025, M["path"], 2.0, 2)
-    return {"path_main": t1, "path_cross": t2}
-
-
-def build_path_stones(M=None, count=80):
-    """Плоские камни вдоль краёв троп — один меш."""
+def build_path_stones(M=None, count=230):
+    """Камни у краёв троп и на них: от мелкой гальки до булыжников, разный поворот и форма."""
     M = M or mats()
     clear("path_stones_")
     rnd = random.Random(9)
     bm = bmesh.new()
-    for _ in range(count):
-        if rnd.random() < 0.65:   # вдоль главной тропы
-            y = rnd.uniform(-18.5, 15.5)
-            x = 0.4 * math.sin((y + HALF - 0.4) / 0.6 * 0.35) + rnd.choice((-1, 1)) * rnd.uniform(0.7, 1.6)
-        else:                      # вдоль поперечной
-            x = rnd.uniform(-11, 11)
-            y = 4.0 + 0.3 * math.sin((x + 12) / 0.6 * 0.4) + rnd.choice((-1, 1)) * rnd.uniform(0.6, 1.4)
-        rx, ry, rz = rnd.uniform(0.09, 0.22), rnd.uniform(0.07, 0.17), rnd.uniform(0.03, 0.07)
-        mat = (Matrix.Translation((x, y, rz * 0.55)) @ Matrix.Rotation(rnd.uniform(0, 6.28), 4, "Z")
+    placed = tries = 0
+    while placed < count and tries < count * 60:
+        tries += 1
+        if rnd.random() < 0.62:                                    # вдоль главной
+            y = rnd.uniform(-18.6, 15.0)
+            x = 0.4 * math.sin(((y + 19.6) / 0.6) * 0.35) + rnd.gauss(0, 1.15)
+        else:                                                      # вдоль поперечной
+            x = rnd.uniform(-11.5, 11.5)
+            y = 4.0 + 0.3 * math.sin(((x + 12) / 0.6) * 0.4) + rnd.gauss(0, 1.0)
+        sd = path_sd(x, y)
+        if sd > 0.9 or sd < -1.5 or any(math.hypot(x - ox, y - oy) < r for ox, oy, r in OBSTACLES):
+            continue
+        r = rnd.choices([0.05, 0.09, 0.15, 0.24, 0.36], weights=[34, 30, 20, 12, 4])[0] * rnd.uniform(0.8, 1.25)
+        rx, ry, rz = r, r * rnd.uniform(0.6, 1.0), r * rnd.uniform(0.28, 0.5)
+        mat = (Matrix.Translation((x, y, rz * 0.45)) @ Matrix.Rotation(rnd.uniform(0, 6.28), 4, "Z")
                @ Matrix.Diagonal((rx, ry, rz, 1)))
         res = bmesh.ops.create_icosphere(bm, subdivisions=1, radius=1.0, matrix=mat)
         for v in res["verts"]:
-            v.co += Vector((rnd.uniform(-1, 1), rnd.uniform(-1, 1), 0)) * 0.012
+            v.co += Vector((rnd.uniform(-1, 1), rnd.uniform(-1, 1), rnd.uniform(-0.3, 0.3))) * r * 0.18
         box_uv(_faces_of(res["verts"]), bm, tile=1.0, off=(rnd.random(), rnd.random()))
-    o, t = finish("path_stones_a", bm, [M["stone"]])
-    return {"path_stones": t}
+        placed += 1
+    _, t = finish("path_stones_a", bm, [M["stone"]])
+    return {"path_stones": t, "count": placed}
+
+
+def build_mounds(M=None):
+    """Земляные холмики перед надгробиями (по layout.json). UV мировые, как у земли: сливаются с нарисованным грунтом."""
+    M = M or mats()
+    clear("grave_mounds_")
+    rnd = random.Random(21)
+    bm = bmesh.new()
+    count = 0
+    for gx, gy, fx, fy in graves():
+        sc = rnd.uniform(0.92, 1.08)
+        theta = math.atan2(-fx, fy)                               # локальная ось Y → направление «лица»
+        mat = (Matrix.Translation((gx + fx * 1.05, gy + fy * 1.05, 0.0)) @ Matrix.Rotation(theta, 4, "Z")
+               @ Matrix.Diagonal((0.44 * sc, 0.98 * sc, 0.14 * sc, 1)))
+        res = bmesh.ops.create_icosphere(bm, subdivisions=2, radius=1.0, matrix=mat)
+        for v in res["verts"]:
+            v.co += Vector((rnd.uniform(-1, 1), rnd.uniform(-1, 1), rnd.uniform(-1, 1))) * 0.02
+        low = [f for f in _faces_of(res["verts"]) if f.calc_center_median().z < -0.01]
+        bmesh.ops.delete(bm, geom=low, context="FACES")           # нижняя половина под землёй не нужна
+        count += 1
+    uv = bm.loops.layers.uv.verify()
+    for f in bm.faces:
+        f.material_index = 0
+        for lp in f.loops:
+            x, y, _ = lp.vert.co
+            lp[uv].uv = ((x + HALF) / (2 * HALF), (y + HALF) / (2 * HALF))
+    _, t = finish("grave_mounds_a", bm, [M["ground"]], smooth=True)
+    return {"grave_mounds": t, "count": count}
 
 
 def build_fence(M=None):
@@ -491,6 +535,13 @@ def build_trees(M=None):
             add_cone(bm, (0, 0, ln / 2), 0.17, 0.07, ln, seg=6, M=B, tile=1.0)
         for f in bm.faces:
             f.material_index = 0
+        for k in range(6):                                              # корни, выходящие из-под ствола
+            az = k * 60 + rnd.uniform(-14, 14)
+            ln = rnd.uniform(0.9, 1.5) * scale
+            Rt = (T @ Matrix.Translation((0, 0, 0.18)) @ Matrix.Rotation(math.radians(az), 4, "Z")
+                  @ Matrix.Rotation(math.radians(rnd.uniform(72, 84)), 4, "Y"))
+            for f in add_cone(bm, (0, 0, ln / 2 + 0.2), 0.17 * scale, 0.04, ln, seg=5, M=Rt, tile=1.0):
+                f.material_index = 0
         _crown(bm, rnd, base, crown, scale)
         _, t = finish(name, bm, [M["bark"], M["foliage"]])
         stats[name] = t
@@ -559,49 +610,151 @@ def build_bench(M=None):
     return {"bench_wood_a": t}
 
 
-def build_grass(M=None, tufts=420, seed=17):
-    """Пучки травы: острые листья, тёмный низ и светлые кончики; 4 меша по четвертям зоны."""
+GRASS_KINDS = {                      # (низ, кончик) — линейные цвета вершин
+    "green": ((0.010, 0.032, 0.008), (0.060, 0.170, 0.030)),
+    "light": ((0.014, 0.045, 0.010), (0.100, 0.240, 0.040)),
+    "dry": ((0.030, 0.025, 0.010), (0.160, 0.120, 0.040)),
+}
+
+
+def build_grass(M=None, tufts=560, seed=17):
+    """Пучки травы трёх видов (зелёная, светлая, сухая), разной высоты; гуще у ограды и пятнами; 4 меша по четвертям."""
     M = M or mats()
     clear("grass_tufts_")
     rnd = random.Random(seed)
+    gs = graves()
     bms = {q: bmesh.new() for q in range(4)}
-    placed = 0
-    while placed < tufts:
+    placed = tries = 0
+    while placed < tufts and tries < tufts * 40:
+        tries += 1
         x, y = rnd.uniform(-18.8, 18.8), rnd.uniform(-18.8, 18.8)
-        if abs(x - 0.4 * math.sin((y + 19.6) / 0.6 * 0.35)) < 1.9:                   # не на главной тропе
+        if path_sd(x, y) < 0.05 or (abs(x) < 2.6 and y < -17.5):    # не на тропе и не в проёме ворот
             continue
-        if abs(y - 4.0) < 1.7 and abs(x) < 12.5:                                     # не на поперечной
+        clump = max(0.0, math.sin(x * 0.37 + 1.3) * math.cos(y * 0.29 + 0.4))
+        near_fence = max(abs(x), abs(y)) > 17.2
+        if rnd.random() > 0.30 + 0.7 * clump + (0.35 if near_fence else 0.0):
             continue
-        if abs(x) < 2.6 and y < -17.5:                                               # не в проёме ворот
-            continue
+        if any(math.hypot(x - (gx + fx * 1.05), y - (gy + fy * 1.05)) < 0.5 for gx, gy, fx, fy in gs) and rnd.random() < 0.7:
+            continue                                                  # на холмиках реже
+        kind = rnd.choices(["green", "light", "dry"], weights=[6, 3, 2])[0]
+        tall = rnd.random() < 0.16
         q = (0 if x < 0 else 1) + (0 if y < 0 else 2)
         bm = bms[q]
         lay = bm.loops.layers.float_color.get("Color") or bm.loops.layers.float_color.new("Color")
-        scale = rnd.uniform(0.7, 1.3)
-        for _ in range(rnd.randint(5, 8)):
+        scale = rnd.uniform(0.7, 1.3) * (1.9 if tall else 1.0)
+        low, tip = GRASS_KINDS[kind]
+        for _ in range(rnd.randint(5, 9)):
             a = rnd.uniform(0, 6.28)
-            ox, oy = x + math.cos(a) * rnd.uniform(0, 0.08), y + math.sin(a) * rnd.uniform(0, 0.08)
-            h, w = rnd.uniform(0.16, 0.36) * scale, rnd.uniform(0.035, 0.055)
+            ox, oy = x + math.cos(a) * rnd.uniform(0, 0.09), y + math.sin(a) * rnd.uniform(0, 0.09)
+            h, w = rnd.uniform(0.16, 0.34) * scale, rnd.uniform(0.032, 0.055)
             bend = rnd.uniform(0.04, 0.13) * scale
             d = Vector((math.cos(a), math.sin(a), 0))
             side = Vector((-d.y, d.x, 0)) * w
-            p0, p1, p2 = Vector((ox, oy, 0)) - side, Vector((ox, oy, 0)) + side, Vector((ox, oy, 0)) + d * bend
+            p2 = Vector((ox, oy, 0)) + d * bend
             p2.z = h
-            vs = [bm.verts.new(p0), bm.verts.new(p1), bm.verts.new(p2)]
-            f = bm.faces.new(vs)
-            low, tip = (0.010, 0.035, 0.008), (0.075, 0.20, 0.035)
+            f = bm.faces.new([bm.verts.new(Vector((ox, oy, 0)) - side), bm.verts.new(Vector((ox, oy, 0)) + side), bm.verts.new(p2)])
+            jitter = rnd.uniform(0.85, 1.15)
             for lp, c in zip(f.loops, (low, low, tip)):
-                lp[lay] = (*c, 1.0)
+                lp[lay] = (c[0] * jitter, c[1] * jitter, c[2] * jitter, 1.0)
         placed += 1
     stats = {}
     for q, bm in bms.items():
-        _, t = finish(f"grass_tufts_0{q + 1}", bm, [M["blades"]], smooth=False)
+        _, t = finish(f"grass_tufts_0{q + 1}", bm, [M["blades"]])
         stats[f"grass_tufts_0{q + 1}"] = t
     return stats
 
 
-STEPS = [build_ground, build_paths, build_path_stones, build_fence, build_gate, build_trees, build_lamp,
-         build_bench, build_grass]
+def build_flowers(M=None, clusters=9):
+    """Полевые цветы небольшими россыпями (белые, кремовые, сиреневые, жёлтые) — вертексные цвета."""
+    M = M or mats()
+    clear("flowers_")
+    rnd = random.Random(33)
+    gs = graves()
+    bm = bmesh.new()
+    lay = bm.loops.layers.float_color.new("Color")
+    palette = [(0.60, 0.58, 0.45), (0.70, 0.66, 0.50), (0.38, 0.26, 0.55), (0.62, 0.50, 0.08), (0.55, 0.55, 0.60)]
+    count = tries = 0
+    while count < clusters * 18 and tries < 5000:
+        tries += 1
+        if tries % 40 == 1:                                           # новый центр россыпи
+            cx, cy = rnd.uniform(-17, 17), rnd.uniform(-17, 17)
+            petal = rnd.choice(palette)
+        x, y = cx + rnd.gauss(0, 0.9), cy + rnd.gauss(0, 0.9)
+        if blocked(x, y, grave_r=1.0, path_margin=0.4, gs=gs):
+            continue
+        h = rnd.uniform(0.22, 0.42)
+        lean = Vector((rnd.uniform(-0.05, 0.05), rnd.uniform(-0.05, 0.05), 0))
+        base, top = Vector((x, y, 0)), Vector((x, y, h)) + lean
+        w = 0.006
+        stem = bm.faces.new([bm.verts.new(base - Vector((w, 0, 0))), bm.verts.new(base + Vector((w, 0, 0))), bm.verts.new(top)])
+        for lp, c in zip(stem.loops, ((0.010, 0.040, 0.008), (0.010, 0.040, 0.008), (0.03, 0.10, 0.02))):
+            lp[lay] = (*c, 1.0)
+        center = bm.verts.new(top + Vector((0, 0, 0.012)))
+        ring = [bm.verts.new(top + Vector((math.cos(k * math.tau / 5), math.sin(k * math.tau / 5), 0)) * Vector((0.034, 0.034, 1)))
+                for k in range(5)]
+        for k in range(5):
+            f = bm.faces.new((center, ring[k], ring[(k + 1) % 5]))
+            for lp in f.loops:
+                lp[lay] = (0.62, 0.48, 0.05, 1.0) if lp.vert == center else (*petal, 1.0)
+        count += 1
+    _, t = finish("flowers_a", bm, [M["blades"]])
+    return {"flowers_a": t, "count": count}
+
+
+def build_rocks(M=None):
+    """Валуны: у углов ограды, у деревьев и вдоль троп — по одному крупному и паре мелких."""
+    M = M or mats()
+    clear("rocks_")
+    rnd = random.Random(55)
+    gs = graves()
+    bm = bmesh.new()
+    spots = [(-17.2, -17.2), (17.2, -17.2), (17.4, 17.0), (-17.0, 17.4), (-15.0, 3.0), (15.5, 3.5), (-7.5, -14.5),
+             (7.0, 15.0), (-9.0, 11.5), (9.5, -12.0)]
+    n = 0
+    for sx, sy in spots:
+        for k in range(rnd.choice((2, 3, 3))):
+            x, y = sx + rnd.uniform(-0.9, 0.9), sy + rnd.uniform(-0.9, 0.9)
+            if blocked(x, y, grave_r=1.1, path_margin=0.6, gs=gs) and max(abs(x), abs(y)) < 18.3:
+                continue
+            r = rnd.uniform(0.38, 0.75) if k == 0 else rnd.uniform(0.12, 0.28)
+            mat = (Matrix.Translation((x, y, r * 0.25)) @ Matrix.Rotation(rnd.uniform(0, 6.28), 4, "Z")
+                   @ Matrix.Diagonal((r, r * rnd.uniform(0.7, 1.0), r * rnd.uniform(0.5, 0.7), 1)))
+            res = bmesh.ops.create_icosphere(bm, subdivisions=1, radius=1.0, matrix=mat)
+            for v in res["verts"]:
+                v.co += Vector((rnd.uniform(-1, 1), rnd.uniform(-1, 1), rnd.uniform(-1, 1))) * r * 0.20
+            box_uv(_faces_of(res["verts"]), bm, tile=1.0, off=(rnd.random(), rnd.random()))
+            n += 1
+    _, t = finish("rocks_a", bm, [M["stone"]])
+    return {"rocks_a": t, "count": n}
+
+
+def build_twigs(M=None):
+    """Сучья и ветки на земле: у деревьев и россыпью; одна толстая упавшая ветвь у сухого дерева."""
+    M = M or mats()
+    clear("twigs_")
+    rnd = random.Random(77)
+    gs = graves()
+    bm = bmesh.new()
+    def stick(x, y, ln, r, az):
+        B = (Matrix.Translation((x, y, r * 0.8)) @ Matrix.Rotation(az, 4, "Z") @ Matrix.Rotation(math.radians(rnd.uniform(86, 90)), 4, "Y"))
+        add_cone(bm, (0, 0, ln / 2), r, r * 0.55, ln, seg=5, M=B, tile=1.0)
+    for tx, ty, tr in ((-11.0, 8.0, 3.8), (12.0, -7.0, 3.2), (13.0, 13.0, 3.0)):
+        for _ in range(5):
+            a, d = rnd.uniform(0, 6.28), rnd.uniform(0.9, tr)
+            x, y = tx + math.cos(a) * d, ty + math.sin(a) * d
+            if not blocked(x, y, grave_r=0.9, path_margin=0.3, gs=gs):
+                stick(x, y, rnd.uniform(0.4, 1.3), rnd.uniform(0.014, 0.03), rnd.uniform(0, 6.28))
+    stick(11.2, 11.4, 2.4, 0.07, 0.6)                                 # упавшая ветвь у сухого дерева
+    for _ in range(6):
+        x, y = rnd.uniform(-17, 17), rnd.uniform(-17, 17)
+        if not blocked(x, y, grave_r=0.9, path_margin=0.3, gs=gs):
+            stick(x, y, rnd.uniform(0.3, 0.9), rnd.uniform(0.012, 0.022), rnd.uniform(0, 6.28))
+    _, t = finish("twigs_a", bm, [M["bark"]])
+    return {"twigs_a": t}
+
+
+STEPS = [build_ground, build_path_stones, build_mounds, build_fence, build_gate, build_trees, build_lamp,
+         build_bench, build_grass, build_flowers, build_rocks, build_twigs]
 
 
 def build_all():
