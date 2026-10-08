@@ -3,6 +3,9 @@ import { Clock } from "@/core/Clock";
 import { InputManager } from "@/core/InputManager";
 import { AssetLoader } from "@/core/AssetLoader";
 import { SceneManager } from "@/core/SceneManager";
+import { PlayerController } from "@/systems/PlayerController";
+import { FlashlightSystem } from "@/systems/FlashlightSystem";
+import { InteractionSystem } from "@/systems/InteractionSystem";
 
 export class Game {
   private readonly renderer: THREE.WebGLRenderer;
@@ -11,6 +14,10 @@ export class Game {
   private readonly input = new InputManager();
   private readonly assetLoader = new AssetLoader();
   readonly sceneManager = new SceneManager(this.assetLoader);
+
+  private readonly playerController: PlayerController;
+  readonly flashlight = new FlashlightSystem();
+  private readonly interaction: InteractionSystem;
 
   private running = false;
 
@@ -22,6 +29,13 @@ export class Game {
       0.1,
       1000,
     );
+    // Камера добавляется в сцену, чтобы прикреплённый к ней SpotLight (фонарик)
+    // попадал в граф рендера — THREE обходит scene.children, а не камеру отдельно.
+    this.sceneManager.scene.add(this.camera);
+
+    this.playerController = new PlayerController(this.camera, this.input);
+    this.interaction = new InteractionSystem(this.camera);
+    this.flashlight.attachToCamera(this.camera);
 
     this.input.attach(canvas);
     window.addEventListener("resize", () => this.onResize());
@@ -48,8 +62,13 @@ export class Game {
     requestAnimationFrame(this.loop);
   };
 
-  private update(_deltaSec: number): void {
-    // TODO: вызов update() у активных систем (PlayerController, FlashlightSystem и т.д.) — задача 5.2
+  private update(deltaSec: number): void {
+    this.playerController.update(deltaSec);
+    this.flashlight.update(deltaSec);
+    this.interaction.update(this.sceneManager.getInteractableObjects());
+
+    if (this.input.consumeKeyPress("KeyF")) this.flashlight.toggle();
+    if (this.input.consumeKeyPress("KeyE")) this.interaction.interact();
   }
 
   private onResize(): void {

@@ -2,12 +2,21 @@ import * as THREE from "three";
 
 export class FlashlightSystem {
   readonly light: THREE.SpotLight;
+  private readonly target = new THREE.Object3D();
   private chargePercent = 100;
   private on = false;
 
   constructor(private readonly drainPerSecond = 2) {
-    this.light = new THREE.SpotLight(0xfff2cc, 0, 20, Math.PI / 7, 0.4);
+    this.light = new THREE.SpotLight(0xfff2cc, 15, 20, Math.PI / 7, 0.4);
     this.light.visible = false;
+    this.target.position.set(0, 0, -1);
+    this.light.target = this.target;
+  }
+
+  /** Привязывает фонарик к камере игрока: конус светит туда, куда смотрит камера. */
+  attachToCamera(camera: THREE.Camera): void {
+    camera.add(this.light);
+    camera.add(this.target);
   }
 
   toggle(): void {
