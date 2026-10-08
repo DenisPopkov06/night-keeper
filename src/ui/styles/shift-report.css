@@ -1,0 +1,51 @@
+/* Экран итогов смены. Корень переключается кодом через inline display (none/block),
+   поэтому центрирование — позиционированием, а затемнение фона — тенью-«заливкой». */
+
+.shift-report {
+  pointer-events: auto;
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: min(92vw, 400px);
+  max-height: 92vh;
+  overflow-y: auto;
+  box-sizing: border-box;
+  padding: clamp(18px, 4vmin, 30px);
+  text-align: center;
+  background: linear-gradient(180deg, rgba(14, 22, 42, 0.96), rgba(8, 13, 26, 0.96));
+  border: 1px solid var(--nk-border);
+  border-radius: 14px;
+  box-shadow:
+    0 0 0 100vmax rgba(2, 4, 10, 0.62),
+    0 18px 60px rgba(0, 0, 0, 0.6),
+    inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  animation: nk-pop 0.2s ease-out;
+}
+
+.shift-report__title {
+  margin: 0 0 0.9em;
+  padding-bottom: 0.7em;
+  font-size: clamp(22px, 4.6vmin, 32px);
+  font-weight: normal;
+  letter-spacing: 0.06em;
+  color: var(--nk-accent);
+  background: linear-gradient(90deg, transparent, var(--nk-accent), transparent) bottom / 70% 1px
+    no-repeat;
+  text-shadow: 0 0 18px var(--nk-accent-glow);
+}
+
+.shift-report__tasks,
+.shift-report__time {
+  margin: 0.4em 0;
+  font-size: clamp(16px, 2.9vmin, 21px);
+  color: var(--nk-text);
+}
+
+.shift-report__score {
+  margin: 0.9em 0 0.6em;
+  font-size: clamp(24px, 5vmin, 36px);
+  color: var(--nk-accent);
+  letter-spacing: 0.04em;
+  font-variant-numeric: tabular-nums;
+}
