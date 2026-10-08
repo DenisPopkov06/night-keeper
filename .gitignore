@@ -1,5 +1,28 @@
+# Зависимости и билд
 node_modules/
 dist/
+*.zip
 *.local
-.DS_Store
+
+# Логи
+npm-debug.log*
+*.log
+
+# Окружение
+.env
+.env.*
+!.env.example
+
+# Редакторы и ОС
+.vscode/*
+!.vscode/extensions.json
 .idea/
+.DS_Store
+Thumbs.db
+
+# Blender: автобэкапы (.blend1, .blend2, ...) и временные файлы сохранения
+*.blend[0-9]
+*.blend@
+
+# Photoshop: временные файлы
+~*.psd
