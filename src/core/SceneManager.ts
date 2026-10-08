@@ -18,6 +18,7 @@ export class SceneManager {
 
   private zoneRoot: THREE.Group | null = null;
   private currentZoneId: string | null = null;
+  private currentLayout: ZoneLayout | null = null;
   private readonly interactableObjects: THREE.Object3D[] = [];
 
   constructor(private readonly assetLoader: AssetLoader) {}
@@ -28,8 +29,14 @@ export class SceneManager {
     const zoneRoot = new THREE.Group();
     zoneRoot.name = `zone:${layout.zoneId}`;
 
-    const zoneGltf = await this.assetLoader.loadModel(layout.modelPath);
-    zoneRoot.add(zoneGltf.scene.clone(true));
+    try {
+      const zoneGltf = await this.assetLoader.loadModel(layout.modelPath);
+      zoneRoot.add(zoneGltf.scene.clone(true));
+    } catch (error) {
+      // Контент приходит от дизайнера постепенно — отсутствующая/битая модель зоны
+      // не должна ронять весь игровой цикл, только оставлять зону без базовой геометрии.
+      console.warn(`[SceneManager] не удалось загрузить модель зоны "${layout.modelPath}"`, error);
+    }
 
     await Promise.all(
       layout.objects.map((placed) => this.spawnPlacedObject(placed, zoneRoot)),
@@ -38,6 +45,7 @@ export class SceneManager {
     this.scene.add(zoneRoot);
     this.zoneRoot = zoneRoot;
     this.currentZoneId = layout.zoneId;
+    this.currentLayout = layout;
   }
 
   private async spawnPlacedObject(placed: PlacedObject, parent: THREE.Group): Promise<void> {
@@ -47,7 +55,14 @@ export class SceneManager {
       return;
     }
 
-    const gltf = await this.assetLoader.loadModel(catalogEntry.modelPath);
+    let gltf;
+    try {
+      gltf = await this.assetLoader.loadModel(catalogEntry.modelPath);
+    } catch (error) {
+      console.warn(`[SceneManager] не удалось загрузить модель объекта "${placed.objectId}"`, error);
+      return;
+    }
+
     const instance = gltf.scene.clone(true);
     instance.position.set(placed.position.x, placed.position.y, placed.position.z);
     instance.rotation.y = THREE.MathUtils.degToRad(placed.rotationY);
@@ -67,10 +82,15 @@ export class SceneManager {
     this.zoneRoot = null;
     this.interactableObjects.length = 0;
     this.currentZoneId = null;
+    this.currentLayout = null;
   }
 
   getCurrentZoneId(): string | null {
     return this.currentZoneId;
+  }
+
+  getCurrentLayout(): ZoneLayout | null {
+    return this.currentLayout;
   }
 
   getInteractableObjects(): THREE.Object3D[] {
