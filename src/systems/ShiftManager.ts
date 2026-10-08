@@ -43,6 +43,10 @@ export class ShiftManager {
     return this.completedTaskIds.size;
   }
 
+  getCompletedTaskIds(): ReadonlySet<string> {
+    return this.completedTaskIds;
+  }
+
   private handleStateChange(instanceId: string, state: ObjectState): void {
     if (this.ended || !this.currentConfig) return;
     if (state !== ObjectState.NORMAL) return;
