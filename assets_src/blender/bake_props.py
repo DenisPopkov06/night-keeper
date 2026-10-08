@@ -548,4 +548,5 @@ def main():
     log("saved", OUT_BLEND)
 
 
-main()
+if __name__ == "__main__":  # при импорте из zone_textures.py сборка пропсов не запускается
+    main()
