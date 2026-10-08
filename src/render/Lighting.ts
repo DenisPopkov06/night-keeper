@@ -2,10 +2,10 @@ import * as THREE from "three";
 
 export const LIGHTING_CONFIG = {
   moonColor: 0x8fa6c9,
-  moonIntensity: 0.4,
+  moonIntensity: 1.5,
   moonPosition: new THREE.Vector3(15, 25, 10),
   ambientColor: 0x1a2030,
-  ambientIntensity: 0.25,
+  ambientIntensity: 0.6,
   fogColor: 0x0a0d14,
   fogNear: 5,
   fogFar: 40,
