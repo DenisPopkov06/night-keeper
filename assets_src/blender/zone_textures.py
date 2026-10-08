@@ -1,12 +1,15 @@
-"""Бесшовные текстуры зоны «Старое кладбище» (синтез на numpy) + табличка ворот.
+"""Текстуры зоны «Старое кладбище» (синтез на numpy): уникальная земля, тайлы, табличка ворот.
 
-Тайлы: трава, тропа, дерево, кора, камень — albedo / normal / ORM (JPEG) в assets_src/textures_src/
-с префиксом tile_. Шум периодический (FFT), поэтому швов при повторе нет. Табличка ворот —
+Земля — ОДНА уникальная карта 2048² на всю зону (ground_old_cemetery_*, ≈2 см/пиксель, без повторов):
+трава, проплешины, подстилка, холмики у надгробий (по layout.json), тропы. Тайлы дерево/кора/камень —
+albedo / normal / ORM (JPEG) в assets_src/textures_src/ с префиксом tile_. Шум периодический (FFT), поэтому швов при повторе нет. Табличка ворот —
 отдельная текстура 1024x256 с надписью (шрифт Times New Roman Bold, кириллица).
 
 Запуск:  blender --background --factory-startup --python assets_src/blender/zone_textures.py
 Цвета заданы как отображаемые sRGB (то, что видно на картинке).
 """
+import json
+import math
 import os
 import sys
 
@@ -84,17 +87,27 @@ def normal_from_height(h, strength):
 
 
 # ----------------------------------------------------------------------------- запись
-def save_set(name, albedo, height, rough, ao, normal_strength):
+def down(a, k):
+    """Уменьшение в k раз усреднением блоков."""
+    if k == 1:
+        return a
+    h, w = a.shape[:2]
+    return a.reshape(h // k, k, w // k, k, *a.shape[2:]).mean(axis=(1, 3))
+
+
+def save_set(name, albedo, height, rough, ao, normal_strength, orm_stride=1, normal_stride=1):
     h, w = height.shape
+    k = orm_stride
     maps = {
         "albedo": np.clip(albedo, 0, 1),
-        "normal": normal_from_height(height, normal_strength),
-        "orm": np.stack([np.clip(ao, 0, 1), np.clip(rough, 0, 1), np.zeros_like(height)], axis=-1),
+        "normal": down(normal_from_height(height, normal_strength), normal_stride),
+        "orm": down(np.stack([np.clip(ao, 0, 1), np.clip(rough, 0, 1), np.zeros_like(height)], axis=-1), k),
     }
     for kind, rgb in maps.items():
-        img = bpy.data.images.new(f"nk_{name}_{kind}", w, h, alpha=False)
+        hh, ww = rgb.shape[:2]
+        img = bpy.data.images.new(f"nk_{name}_{kind}", ww, hh, alpha=False)
         img.colorspace_settings.name = "sRGB" if kind == "albedo" else "Non-Color"
-        data = np.ones((h, w, 4), np.float32)
+        data = np.ones((hh, ww, 4), np.float32)
         data[..., :3] = rgb
         img.pixels.foreach_set(data.ravel())
         img.filepath_raw = os.path.join(TEX_DIR, f"{name}_{kind}.jpg")
@@ -106,34 +119,149 @@ def save_set(name, albedo, height, rough, ao, normal_strength):
 
 
 # ----------------------------------------------------------------------------- тайлы
-def tile_grass(n=1024):
-    low, mid, fine = pnoise(n, 3.0, seed=1), pnoise(n, 2.0, seed=2), pnoise(n, 1.2, seed=3)
-    streak = pnoise(n, 1.6, aniso=(1, 7), seed=4)
-    col = lerp((0.10, 0.17, 0.075), (0.19, 0.29, 0.10), n01(0.8 * low + 0.5 * mid, 0.30))
-    col = col * (1 + 0.14 * streak[..., None] + 0.07 * fine[..., None])
-    dirt = sstep(0.68, 0.82, n01(pnoise(n, 3.0, seed=5), 0.3))[..., None] * 0.45
-    col = col * (1 - dirt) + np.array((0.25, 0.18, 0.10)) * dirt
-    h = 0.5 + 0.20 * streak + 0.12 * fine
-    return save_set("tile_grass", col, h, np.full((n, n), 0.95), 0.82 + 0.4 * (h - 0.5), 5.0)
+# ----------------------------------------------------------------------------- земля зоны (уникальная)
+GN = 2048   # сторона карты земли, пикселей
+GM = 40.0   # сторона зоны, м  → ≈2 см на пиксель
+LAYOUT = os.path.join(bake_props.REPO, "src", "levels", "zone_old_cemetery", "layout.json")
+TREES = [(-11.0, 8.0, 6.0), (12.0, -7.0, 5.0), (13.0, 13.0, 3.4)]  # Blender x, y, радиус подстилки, м
 
 
-def tile_path(n=1024):
-    d1, d2, idx = voronoi(n, 150, seed=11)
-    rr = np.random.default_rng(12)
-    r0 = 0.5 * n / np.sqrt(150)
-    size = rr.uniform(0.40, 0.78, 150) * r0
-    tone = rr.uniform(0.0, 1.0, 150)
-    peb = d1 < size[idx]
-    dome = np.clip(1 - d1 / size[idx], 0, 1) ** 0.6
-    soil_t = n01(pnoise(n, 2.2, seed=13), 0.3)
-    soil = lerp((0.24, 0.17, 0.11), (0.33, 0.24, 0.16), soil_t)
-    stone = lerp((0.36, 0.33, 0.30), (0.52, 0.49, 0.45), tone[idx])
-    col = np.where(peb[..., None], stone * (0.8 + 0.3 * dome[..., None]), soil)
-    fine = pnoise(n, 1.2, seed=14)
-    col = col * (1 + 0.10 * fine[..., None])
-    h = np.where(peb, 0.45 + 0.55 * dome, 0.30 + 0.05 * fine)
-    ao = np.where(peb, 0.95, 0.65)
-    return save_set("tile_path", col, h, np.where(peb, 0.8, 0.95), ao, 7.0)
+def fft_up(a, n_out):
+    """Идеальное (по спектру) увеличение периодического поля без блочности."""
+    n = a.shape[0]
+    if n >= n_out:
+        return a
+    spec = np.fft.fftshift(np.fft.fft2(a))
+    pad = np.zeros((n_out, n_out), complex)
+    s0 = (n_out - n) // 2
+    pad[s0:s0 + n, s0:s0 + n] = spec
+    return np.real(np.fft.ifft2(np.fft.ifftshift(pad))) * (n_out / n) ** 2
+
+
+def field(feature_m, seed, beta=2.4):
+    """Гладкое поле с характерным размером ~feature_m метров на всю карту земли (нулевое среднее, σ=1)."""
+    n = int(np.clip(GM / feature_m * 5, 16, GN))
+    n -= n % 2
+    a = fft_up(pnoise(n, beta, seed=seed), GN)
+    return (a - a.mean()) / (a.std() + 1e-9)
+
+
+def window(cx, cy, r):
+    """Срез карты вокруг точки (метры): (срез по строкам, срез по столбцам, X, Y в метрах)."""
+    px = GM / GN
+    x0, x1 = int(max(0, (cx - r + GM / 2) / px)), int(min(GN, (cx + r + GM / 2) / px + 1))
+    y0, y1 = int(max(0, (cy - r + GM / 2) / px)), int(min(GN, (cy + r + GM / 2) / px + 1))
+    xs = (np.arange(x0, x1) + 0.5) * px - GM / 2
+    ys = (np.arange(y0, y1) + 0.5) * px - GM / 2
+    wx, wy = np.meshgrid(xs, ys)
+    return slice(y0, y1), slice(x0, x1), wx, wy
+
+
+def ground_unique():
+    px = GM / GN
+    c = (np.arange(GN) + 0.5) * px - GM / 2
+    X, Y = np.meshgrid(c, c)  # строка 0 = y -20 (V=0), столбец 0 = x -20 (U=0)
+
+    big, mid, small = field(9.0, 101), field(3.2, 102), field(0.9, 103)
+    fine = pnoise(GN, 1.15, seed=104)
+    streak_v = pnoise(GN, 1.5, aniso=(1, 6), seed=105)
+    streak_h = pnoise(GN, 1.5, aniso=(6, 1), seed=106)
+    pick = n01(field(1.5, 107), 0.35)
+    streak = streak_v * pick + streak_h * (1 - pick)  # травинки лежат в разные стороны
+
+    # --- трава: от густой тёмной до жухлой, крупными пятнами
+    t = n01(0.65 * mid + 0.35 * big + 0.15 * small, 0.30)
+    col = lerp((0.075, 0.130, 0.055), (0.165, 0.250, 0.085), t)
+    dry = sstep(0.55, 0.80, n01(field(7.0, 108), 0.3))[..., None] * 0.55
+    col = col * (1 - dry) + np.array((0.235, 0.220, 0.105)) * dry
+    damp = sstep(0.60, 0.85, n01(field(4.5, 109), 0.3))
+    col = col * (1 - 0.18 * damp[..., None])
+    col = col * (1 + 0.09 * fine[..., None] + 0.08 * streak[..., None])
+    height = 0.5 + 0.075 * fine + 0.09 * streak + 0.06 * field(0.3, 113)
+
+    # --- проплешины голой земли
+    soil_m = sstep(0.74, 0.84, n01(0.8 * field(2.4, 110) + 0.55 * field(0.55, 111), 0.25)) * (0.55 + 0.45 * n01(field(5.0, 115), 0.3))
+    soil = lerp((0.19, 0.135, 0.085), (0.30, 0.215, 0.135), n01(field(0.9, 112), 0.3)) * (1 + 0.10 * fine[..., None])
+    col = col * (1 - 0.92 * soil_m[..., None]) + soil * 0.92 * soil_m[..., None]
+    height -= 0.06 * soil_m
+
+    # --- подстилка из листьев под деревьями + голая земля у корней
+    lit_speck, lit_tone = field(0.16, 120, 1.8), field(0.35, 125)
+    for tx, ty, tr in TREES:
+        sy, sx, wx, wy = window(tx, ty, tr * 1.6)
+        r = np.hypot(wx - tx, wy - ty)
+        fall = np.exp(-(r / (tr * 0.75)) ** 2)
+        speck = sstep(0.54, 0.68, n01(lit_speck[sy, sx], 0.3))
+        m = np.clip(fall * (0.45 + 1.1 * speck), 0, 1)[..., None]
+        leaf = lerp((0.21, 0.125, 0.05), (0.38, 0.25, 0.09), n01(lit_tone[sy, sx], 0.3))
+        col[sy, sx] = col[sy, sx] * (1 - 0.8 * m) + leaf * 0.8 * m
+        bare = (np.exp(-(r / 0.95) ** 2) * 0.9)[..., None]
+        col[sy, sx] = col[sy, sx] * (1 - bare) + np.array((0.15, 0.105, 0.07)) * bare
+        height[sy, sx] -= 0.03 * fall
+
+    # --- у ограды: сорняк погуще и темнее
+    inside = GM / 2 - 0.5 - np.maximum(np.abs(X), np.abs(Y))
+    weeds = sstep(1.1, 0.0, inside) * (0.55 + 0.45 * n01(field(0.45, 114), 0.3))
+    col = col * (1 - 0.45 * weeds[..., None]) + np.array((0.055, 0.105, 0.04)) * 0.45 * weeds[..., None]
+
+    # --- холмики перед надгробиями (по layout.json): земля, редкие всходы
+    graves = [o for o in json.load(open(LAYOUT, encoding="utf-8"))["objects"] if o["objectId"].startswith("gravestone")]
+    mound_m = np.zeros((GN, GN), np.float32)
+    edge_n, mound_tone, sprout = field(0.35, 130), field(0.12, 131, 1.6), field(0.1, 132, 1.6)
+    for o in graves:
+        gx, gy = o["position"]["x"], -o["position"]["z"]
+        a = math.radians(o["rotationY"])
+        fx, fy = math.sin(a), -math.cos(a)           # куда «смотрит» надгробие (Blender: y = -z)
+        cx, cy = gx + fx * 1.05, gy + fy * 1.05
+        sy, sx, wx, wy = window(cx, cy, 1.6)
+        u = (wx - cx) * fx + (wy - cy) * fy
+        v = -(wx - cx) * fy + (wy - cy) * fx
+        d = (np.abs(u) / 0.98) ** 2.6 + (np.abs(v) / 0.44) ** 2.6 - 1 + 0.30 * edge_n[sy, sx]
+        mound_m[sy, sx] = np.maximum(mound_m[sy, sx], 1 - sstep(-0.25, 0.20, d))
+    mcol = lerp((0.20, 0.15, 0.095), (0.30, 0.225, 0.14), n01(mound_tone, 0.3))
+    spr = sstep(0.62, 0.74, n01(sprout, 0.3))[..., None]
+    mcol = mcol * (1 - 0.7 * spr) + np.array((0.12, 0.19, 0.07)) * 0.7 * spr
+    col = col * (1 - 0.88 * mound_m[..., None]) + mcol * 0.88 * mound_m[..., None]
+    height += 0.05 * mound_m
+
+    # --- тропы (та же геометрия, что в zone_lib: главная от ворот на север и поперечная)
+    i = (Y + 19.6) / 0.6
+    xc = 0.4 * np.sin(i * 0.35)
+    w = (2.5 + 0.25 * np.sin(i * 0.5)) * (1 - 0.9 * sstep(46, 60, i))
+    sd_main = np.where((i < -1) | (i > 61), 9.0, np.abs(X - xc) - w / 2)
+    j = (X + 12) / 0.6
+    yc = 4 + 0.3 * np.sin(j * 0.4)
+    wc = np.maximum(2.0 * np.minimum(np.minimum(j / 4, (40 - j) / 4 + 0.15), 1.0) + 0.25, 0)
+    sd_cross = np.where((j < -1) | (j > 41), 9.0, np.abs(Y - yc) - wc / 2)
+    sd = np.minimum(sd_main, sd_cross) + 0.20 * field(0.9, 140) + 0.06 * field(0.25, 141)
+    pm = 1 - sstep(-0.10, 0.14, sd)                  # маска тропы с неровным краем
+    fringe = sstep(0.0, 0.5, sd) * (1 - sstep(0.5, 0.9, sd))
+    core = np.clip(-sd, 0, 1)
+    pc = lerp((0.30, 0.225, 0.15), (0.40, 0.30, 0.20), n01(field(0.7, 142), 0.3))
+    pc = pc * (1 - 0.10 * core[..., None] + 0.06 * (1 - core[..., None])) * (1 + 0.10 * field(1.6, 147)[..., None])
+    peb = sstep(0.64, 0.70, n01(0.9 * field(0.16, 143) + 0.25 * pnoise(GN, 0.9, seed=144), 0.26))
+    pebcol = lerp((0.36, 0.33, 0.29), (0.57, 0.54, 0.49), n01(field(0.4, 145), 0.3))
+    gap = sstep(0.45, 0.60, n01(field(0.12, 146), 0.3))
+    col = col * (1 - 0.25 * fringe[..., None])
+    col = col * (1 - pm[..., None]) + pc * (1 - 0.18 * gap[..., None]) * pm[..., None]
+    pp = (peb * pm * 0.9)[..., None]
+    col = col * (1 - pp) + pebcol * pp
+    height = height * (1 - 0.6 * pm) + 0.30 * pm + 0.35 * peb * pm
+
+    # --- редкие полевые цветы (мелкие крапинки на траве)
+    fl = sstep(2.55, 2.95, field(0.07, 150, 1.0)) * (1 - pm) * (1 - soil_m) * (1 - mound_m)
+    ftone = n01(field(2.0, 151), 0.5)
+    fcol = lerp((0.62, 0.60, 0.45), (0.55, 0.45, 0.62), ftone)
+    col = col * (1 - 0.9 * fl[..., None]) + fcol * 0.9 * fl[..., None]
+
+    # --- виньетка к краям, чтобы зона «тонула» в темноте
+    edge2 = np.clip((GM / 2 - np.maximum(np.abs(X), np.abs(Y))) / 7, 0, 1)
+    col = col * (0.62 + 0.38 * edge2)[..., None]
+
+    rough = 0.94 - 0.05 * pm - 0.04 * soil_m
+    ao = 0.90 - 0.10 * soil_m - 0.08 * damp - 0.12 * weeds - 0.08 * pm * gap
+    save_set("ground_old_cemetery", col, height, rough, ao, 5.5, orm_stride=4, normal_stride=2)
+    return np.clip(col, 0, 1)
 
 
 def tile_wood(n=512):
@@ -204,11 +332,10 @@ def contact_sheet(parts):
 
 
 if __name__ == "__main__":
-    grass = tile_grass()
-    path = tile_path()
+    ground = ground_unique()
     wood_alb, wood_col = tile_wood()
     bark = tile_bark()
     stone = tile_stone()
     sign_texture(wood_col)
-    contact_sheet([grass, path, wood_alb, bark, stone])
+    contact_sheet([ground, wood_alb, bark, stone])
     print("NK: done", flush=True)
