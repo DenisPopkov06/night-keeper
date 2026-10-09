@@ -39,18 +39,18 @@ PROPS = {
     "gravestone_cross_a": dict(
         kind="stone", size=1024, x=-2.4, crack=0.8, moss=0.9, moss_h=0.32,
         colors=((0.12, 0.12, 0.13), (0.23, 0.22, 0.21)),
-        text=dict(lines=["ПОКОЙСЯ С МИРОМ"], center=(0.0, 0.075), size=(0.50, 0.075), font=FONT_BOLD),
+        text=dict(lines=["ПОКОЙСЯ С МИРОМ"], center=(0.0, 0.18), size=(0.46, 0.07), font=FONT_BOLD),
     ),
     "gravestone_arch_a": dict(
         kind="stone", size=1024, x=-1.2, crack=1.0, moss=0.7, moss_h=0.30,
         colors=((0.13, 0.13, 0.14), (0.24, 0.23, 0.22)),
-        text=dict(lines=["R.I.P.", "ELEANOR", "MARSH", "1858 – 1911"], center=(0.0, 0.62),
+        text=dict(lines=["R.I.P.", "ELEANOR", "MARSH", "1858 – 1911"], center=(0.0, 0.70),
                   size=(0.42, 0.40), font=FONT_BOLD),
     ),
     "gravestone_slab_a": dict(
         kind="stone", size=1024, x=1.2, crack=1.1, moss=0.8, moss_h=0.28,
         colors=((0.11, 0.12, 0.12), (0.21, 0.21, 0.20)),
-        text=dict(lines=["†", "ИВАН", "ПЕТРОВИЧ", "СМОЛИН", "1871 – 1934"], center=(0.0, 0.43),
+        text=dict(lines=["†", "ИВАН", "ПЕТРОВИЧ", "СМОЛИН", "1871 – 1934"], center=(0.0, 0.55),
                   size=(0.50, 0.52), font=FONT_BOLD),
     ),
     "vase_clay_01": dict(
@@ -91,20 +91,25 @@ def make_object(name, bm, col):
 
 def geometry(name, col):
     bm = bmesh.new()
-    if name == "gravestone_cross_a":  # крест на цоколе, 1.05 м
-        box(bm, 0, 0, 0.075, 0.62, 0.34, 0.15)
-        extrude_profile(bm, [(-0.10, 0.15), (0.10, 0.15), (0.10, 0.72), (0.28, 0.72), (0.28, 0.90),
-                             (0.10, 0.90), (0.10, 1.05), (-0.10, 1.05), (-0.10, 0.90), (-0.28, 0.90),
-                             (-0.28, 0.72), (-0.10, 0.72)], 0.13)
-    elif name == "gravestone_arch_a":  # арка на цоколе, 1.00 м
-        box(bm, 0, 0, 0.06, 0.74, 0.30, 0.12)
-        arch = [(-0.30, 0.12), (0.30, 0.12)] + [
-            (0.30 * math.cos(math.radians(a)), 0.70 + 0.30 * math.sin(math.radians(a)))
+    if name == "gravestone_cross_a":  # крест на двухступенчатом цоколе, 1.14 м
+        box(bm, 0, 0, 0.06, 0.72, 0.42, 0.12)
+        box(bm, 0, 0, 0.18, 0.56, 0.32, 0.12)
+        dz = 0.09
+        extrude_profile(bm, [(x, z + dz) for x, z in [
+            (-0.10, 0.15), (0.10, 0.15), (0.10, 0.72), (0.28, 0.72), (0.28, 0.90), (0.10, 0.90), (0.10, 1.05),
+            (-0.10, 1.05), (-0.10, 0.90), (-0.28, 0.90), (-0.28, 0.72), (-0.10, 0.72)]], 0.13)
+    elif name == "gravestone_arch_a":  # арка на двухступенчатом основании, 1.08 м
+        box(bm, 0, 0, 0.05, 0.86, 0.36, 0.10)
+        box(bm, 0, 0, 0.15, 0.76, 0.30, 0.10)
+        arch = [(-0.30, 0.20), (0.30, 0.20)] + [
+            (0.30 * math.cos(math.radians(a)), 0.78 + 0.30 * math.sin(math.radians(a)))
             for a in range(0, 181, 20)]
         extrude_profile(bm, arch, 0.12)
-    elif name == "gravestone_slab_a":  # плита со срезанными углами, 0.85 м
-        extrude_profile(bm, [(-0.35, 0), (0.35, 0), (0.35, 0.77), (0.27, 0.85), (-0.27, 0.85),
-                             (-0.35, 0.77)], 0.14)
+    elif name == "gravestone_slab_a":  # плита на основании, скол верхнего правого угла, 0.97 м
+        box(bm, 0, 0, 0.06, 0.84, 0.30, 0.12)
+        extrude_profile(bm, [(x, z + 0.12) for x, z in [
+            (-0.35, 0), (0.35, 0), (0.35, 0.70), (0.31, 0.74), (0.29, 0.83), (0.20, 0.85), (-0.27, 0.85),
+            (-0.35, 0.77)]], 0.14)
     elif name == "vase_clay_01":  # токарный профиль, 16 граней, 0.285 м
         prof = [(0.0, 0.0), (0.060, 0.0), (0.085, 0.02), (0.100, 0.06), (0.112, 0.11), (0.113, 0.14),
                 (0.100, 0.18), (0.075, 0.215), (0.052, 0.238), (0.050, 0.250), (0.066, 0.272),
