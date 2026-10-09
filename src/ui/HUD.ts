@@ -80,7 +80,9 @@ export class HUD {
     this.compassEl.className = "hud__compass";
     this.compassArrowEl = document.createElement("span");
     this.compassArrowEl.className = "hud__compass-arrow";
-    this.compassArrowEl.textContent = "▲";
+    // "▲" — сплошной равносторонний треугольник, при повороте почти не видно, куда
+    // именно он смотрит. "↑" — явный штрих+остриё, направление читается однозначно.
+    this.compassArrowEl.textContent = "↑";
     this.compassDistanceEl = document.createElement("span");
     this.compassDistanceEl.className = "hud__compass-distance";
     this.compassEl.append(this.compassArrowEl, this.compassDistanceEl);

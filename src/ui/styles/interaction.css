@@ -47,6 +47,7 @@
 .hud__compass-arrow {
   display: inline-block;
   font-size: clamp(16px, 3vmin, 22px);
+  font-weight: bold;
   color: var(--nk-accent);
   transition: transform 0.2s ease;
 }
