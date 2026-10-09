@@ -27,14 +27,14 @@ export class InputManager {
     this.mouseDeltaY += event.movementY;
   };
 
+  private pointerLocked = false;
+
   private readonly onClick = (): void => {
-    // requestPointerLock() может отказать синхронно или через rejected promise
-    // (нет user gesture, нет поддержки в embed-контексте) — это не ошибка игры.
-    try {
-      void this.target?.requestPointerLock()?.catch(() => {});
-    } catch {
-      // игнорируем — просто не получили pointer lock
-    }
+    this.requestPointerLock();
+  };
+
+  private readonly onPointerLockChange = (): void => {
+    this.pointerLocked = document.pointerLockElement === this.target;
   };
 
   private readonly onTouchStart = (event: TouchEvent): void => {
@@ -94,6 +94,7 @@ export class InputManager {
     target.addEventListener("touchmove", this.onTouchMove, { passive: true });
     target.addEventListener("touchend", this.onTouchEnd, { passive: true });
     target.addEventListener("touchcancel", this.onTouchEnd, { passive: true });
+    document.addEventListener("pointerlockchange", this.onPointerLockChange);
   }
 
   detach(): void {
@@ -108,9 +109,25 @@ export class InputManager {
       target.removeEventListener("touchend", this.onTouchEnd);
       target.removeEventListener("touchcancel", this.onTouchEnd);
     }
+    document.removeEventListener("pointerlockchange", this.onPointerLockChange);
     this.target = null;
     this.keysDown.clear();
     this.keysPressed.clear();
+  }
+
+  /** requestPointerLock() может отказать синхронно или через rejected promise
+   *  (нет user gesture, нет поддержки в embed-контексте) — это не ошибка игры,
+   *  просто курсор останется видимым (и упрётся в край экрана при повороте). */
+  requestPointerLock(): void {
+    try {
+      void this.target?.requestPointerLock()?.catch(() => {});
+    } catch {
+      // игнорируем
+    }
+  }
+
+  isPointerLocked(): boolean {
+    return this.pointerLocked;
   }
 
   isKeyDown(code: string): boolean {
