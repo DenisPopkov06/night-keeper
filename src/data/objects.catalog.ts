@@ -61,6 +61,25 @@ function decor(objectId: string, collisionRadius?: number): ObjectCatalogEntry {
   };
 }
 
+/** Длинные/сложные по силуэту — круг не подходит, коллизия идёт по мешу. */
+function decorMesh(objectId: string): ObjectCatalogEntry {
+  return {
+    modelPath: `models/props/${objectId}.glb`,
+    interactable: false,
+    repairableStates: [],
+    collisionMesh: true,
+  };
+}
+
+/** Переносимый мелкий предмет — задачи MISSING(/FALLEN), сквозь него можно пройти. */
+function pickup(objectId: string, states: ObjectState[]): ObjectCatalogEntry {
+  return {
+    modelPath: `models/props/${objectId}.glb`,
+    interactable: true,
+    repairableStates: states,
+  };
+}
+
 export const OBJECTS_CATALOG: Record<string, ObjectCatalogEntry> = {
   gravestone_cross_a: {
     modelPath: "models/props/gravestone_cross_a.glb",
@@ -80,32 +99,30 @@ export const OBJECTS_CATALOG: Record<string, ObjectCatalogEntry> = {
     repairableStates: GRAVESTONE_STATES,
     collisionRadius: GRAVESTONE_COLLISION_RADIUS,
   },
-  vase_clay_01: {
-    modelPath: "models/props/vase_clay_01.glb",
-    interactable: true,
-    repairableStates: [ObjectState.MISSING, ObjectState.DISPLACED],
-    // Без collisionRadius — маленький переносимый предмет, сквозь него проходить можно.
-  },
+  // pot_clay_a (ниже, среди переносимых) заменил vase_clay_01 — тот же горшок, вторая
+  // попытка дизайнера; старую модель из каталога убрал, чтобы на карте не было двух
+  // типов одного и того же предмета.
 
   // Декор — отдельные модели деталей зоны (props_kit.py): без задач и взаимодействия.
-  // collisionRadius — по стволу/основанию. Дому, воротам, забору и скамье круг не подходит
-  // (длинные/с проходом) — у них коллизии пока нет.
+  // collisionRadius — по стволу/основанию (крупное — коллизия, мелкое — можно пройти
+  // вплотную). Дому, воротам, забору и скамье круг не подходит (длинные/с проходом) —
+  // у них коллизия по мешу (collisionMesh), тем же лучом, что у статики зоны.
   tree_oak_a: decor("tree_oak_a", 0.6),
   tree_oak_b: decor("tree_oak_b", 0.5),
   tree_leafy_c: decor("tree_leafy_c", 0.45),
   tree_dead_a: decor("tree_dead_a", 0.5),
-  house_keeper_a: decor("house_keeper_a"),
-  gate_stone_a: decor("gate_stone_a"),
+  house_keeper_a: decorMesh("house_keeper_a"),
+  gate_stone_a: decorMesh("gate_stone_a"),
   lamp_post_a: decor("lamp_post_a", 0.3),
   // Подвесной фонарь: origin — точка подвеса, модель висит вниз на 0.68 м.
+  // Источника света в .glb нет (в отличие от fonarya, запечённого в зону) — добавляет код.
   lantern_iron_a: decor("lantern_iron_a"),
   // Секция 2.4 м вдоль X, origin — середина пролёта; в ряд ставить с шагом 2.4 м. b — сломанная.
-  fence_wood_a: decor("fence_wood_a"),
-  fence_wood_b: decor("fence_wood_b"),
-  bench_wood_a: decor("bench_wood_a"),
+  fence_wood_a: decorMesh("fence_wood_a"),
+  fence_wood_b: decorMesh("fence_wood_b"),
+  bench_wood_a: decorMesh("bench_wood_a"),
   crate_wood_a: decor("crate_wood_a", 0.4),
   barrel_wood_a: decor("barrel_wood_a", 0.35),
-  pot_clay_a: decor("pot_clay_a"),
   pedestal_cross_a: decor("pedestal_cross_a", 0.55),
   rock_mossy_a: decor("rock_mossy_a", 0.8),
   rock_mossy_b: decor("rock_mossy_b"),
@@ -113,6 +130,9 @@ export const OBJECTS_CATALOG: Record<string, ObjectCatalogEntry> = {
   flowers_wild_a: decor("flowers_wild_a"),
   // Бабочка (размах 0.16 м), голова на +Z; в .glb анимация взмаха крыльев «flap» (0.25 с, по кругу).
   butterfly_blue_a: decor("butterfly_blue_a"),
+
+  // Горшок — переносимый предмет (MISSING найти/принести, DISPLACED сдвинут).
+  pot_clay_a: pickup("pot_clay_a", [ObjectState.MISSING, ObjectState.DISPLACED]),
 
   // Варианты надгробий по арт-листу (assets_src/blender/bake_props.py, текстуры запечены): разрушенные —
   // заготовки визуала для BROKEN/FALLEN вместо целого камня; наклонённые — «просевшая земля».
@@ -124,12 +144,14 @@ export const OBJECTS_CATALOG: Record<string, ObjectCatalogEntry> = {
   gravestone_arch_tilted_a: decor("gravestone_arch_tilted_a", 0.45),
   gravestone_headstone_tilted_a: decor("gravestone_headstone_tilted_a", 0.45),
 
-  // Венки (≈ 0.55 × 0.6 м с листьями, «лицом» к +Z, стоят на хвостах ленты — прислонить к надгробию) и цветы (пучки на земле).
-  wreath_fresh_a: decor("wreath_fresh_a"),
-  wreath_flower_a: decor("wreath_flower_a"),
-  wreath_withered_a: decor("wreath_withered_a"),
-  flowers_daisy_a: decor("flowers_daisy_a"),
-  flowers_bluebell_a: decor("flowers_bluebell_a"),
-  flowers_poppy_a: decor("flowers_poppy_a"),
+  // Венки (≈ 0.55 × 0.6 м с листьями, «лицом» к +Z, стоят на хвостах ленты — прислонить
+  // к надгробию) и цветы (пучки на земле) — переносимые предметы заданий (раздел 4.2 ТЗ):
+  // найти рядом и вернуть на место (MISSING); венок также может просто сдуть (FALLEN).
+  wreath_fresh_a: pickup("wreath_fresh_a", [ObjectState.MISSING, ObjectState.FALLEN]),
+  wreath_flower_a: pickup("wreath_flower_a", [ObjectState.MISSING, ObjectState.FALLEN]),
+  wreath_withered_a: pickup("wreath_withered_a", [ObjectState.MISSING, ObjectState.FALLEN]),
+  flowers_daisy_a: pickup("flowers_daisy_a", [ObjectState.MISSING]),
+  flowers_bluebell_a: pickup("flowers_bluebell_a", [ObjectState.MISSING]),
+  flowers_poppy_a: pickup("flowers_poppy_a", [ObjectState.MISSING]),
   // ...остальные объекты по мере добавления дизайнером
 };

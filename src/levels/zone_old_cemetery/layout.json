@@ -383,7 +383,7 @@
     },
     {
       "instanceId": "vase_001",
-      "objectId": "vase_clay_01",
+      "objectId": "pot_clay_a",
       "position": {
         "x": 13.76,
         "y": 0,
@@ -394,7 +394,7 @@
     },
     {
       "instanceId": "vase_002",
-      "objectId": "vase_clay_01",
+      "objectId": "pot_clay_a",
       "position": {
         "x": 5.51,
         "y": 0,
@@ -405,7 +405,7 @@
     },
     {
       "instanceId": "vase_003",
-      "objectId": "vase_clay_01",
+      "objectId": "pot_clay_a",
       "position": {
         "x": 10.94,
         "y": 0,
@@ -416,7 +416,7 @@
     },
     {
       "instanceId": "vase_004",
-      "objectId": "vase_clay_01",
+      "objectId": "pot_clay_a",
       "position": {
         "x": -15.11,
         "y": 0,
@@ -427,7 +427,7 @@
     },
     {
       "instanceId": "vase_005",
-      "objectId": "vase_clay_01",
+      "objectId": "pot_clay_a",
       "position": {
         "x": -10.29,
         "y": 0,
@@ -438,7 +438,7 @@
     },
     {
       "instanceId": "vase_006",
-      "objectId": "vase_clay_01",
+      "objectId": "pot_clay_a",
       "position": {
         "x": -13.29,
         "y": 0,
@@ -449,7 +449,7 @@
     },
     {
       "instanceId": "vase_007",
-      "objectId": "vase_clay_01",
+      "objectId": "pot_clay_a",
       "position": {
         "x": -16.24,
         "y": 0,
@@ -460,7 +460,7 @@
     },
     {
       "instanceId": "vase_008",
-      "objectId": "vase_clay_01",
+      "objectId": "pot_clay_a",
       "position": {
         "x": 14.06,
         "y": 0,
