@@ -185,6 +185,12 @@ export class SceneManager {
   /** Исходный objectId из layout.json — в отличие от userData.objectId на самом
    *  инстансе, не меняется при подмене модели на разрушенный/наклонённый вариант. */
   private readonly baseObjectIdByInstance = new Map<string, string>();
+  /** Какая модель должна стоять на инстансе по ПОСЛЕДНЕМУ состоянию. Обновляется сразу
+   *  (до загрузки модели), в отличие от userData.objectId, который отстаёт на время
+   *  загрузки: без этого быстрая смена состояний (BROKEN → NORMAL → FALLEN, как в
+   *  ShiftManager.startShift) оставляла на экране модель от не последнего состояния —
+   *  например, сломанное надгробие в состоянии NORMAL, с которым ничего нельзя сделать. */
+  private readonly desiredModelByInstance = new Map<string, string>();
   private readonly animationMixers = new Map<THREE.Object3D, THREE.AnimationMixer>();
   private readonly staticCollisionCircles: CollisionCircle[] = [];
 
@@ -290,6 +296,7 @@ export class SceneManager {
     parent.add(instance);
     this.objectsById.set(placed.instanceId, instance);
     this.baseObjectIdByInstance.set(placed.instanceId, placed.objectId);
+    this.desiredModelByInstance.set(placed.instanceId, placed.objectId);
     this.startAnimations(instance, gltf.animations);
     if (catalogEntry.interactable) this.interactableObjects.push(instance);
   }
@@ -305,6 +312,7 @@ export class SceneManager {
     this.interactableObjects.length = 0;
     this.objectsById.clear();
     this.baseObjectIdByInstance.clear();
+    this.desiredModelByInstance.clear();
     this.animationMixers.clear();
     this.currentZoneId = null;
     this.currentLayout = null;
@@ -341,6 +349,9 @@ export class SceneManager {
 
     const variantId = VARIANT_MODEL_BY_STATE[baseObjectId]?.[state];
     const targetModelId = variantId ?? baseObjectId;
+    // Запоминаем желаемую модель сразу: устаревшие результаты загрузки (setInstanceModel)
+    // сверяются с ней и отбрасываются, так что побеждает всегда последнее состояние.
+    this.desiredModelByInstance.set(instanceId, targetModelId);
 
     if (targetModelId !== object.userData.objectId) {
       // Модель-вариант (разбитая/наклонённая) уже сама выглядит как нужное состояние —
@@ -354,10 +365,9 @@ export class SceneManager {
   }
 
   private async setInstanceModel(instanceId: string, modelObjectId: string): Promise<void> {
-    const current = this.objectsById.get(instanceId);
     const anchor = this.getAnchorTransform(instanceId);
     const baseObjectId = this.baseObjectIdByInstance.get(instanceId);
-    if (!current || !anchor || !baseObjectId || !this.zoneRoot) return;
+    if (!anchor || !baseObjectId || !this.zoneRoot) return;
 
     const catalogEntry = OBJECTS_CATALOG[modelObjectId];
     if (!catalogEntry) return;
@@ -370,9 +380,12 @@ export class SceneManager {
       return;
     }
 
-    // Пока модель грузилась, зона могла выгрузиться или инстанс — замениться ещё раз;
-    // в обоих случаях этот (устаревший) результат подставлять уже некуда/нечем.
-    if (this.objectsById.get(instanceId) !== current) return;
+    // Пока модель грузилась, могло прийти более новое состояние (нужна уже другая модель)
+    // или зона выгрузиться — тогда этот устаревший результат подставлять нельзя. Текущий
+    // инстанс берём ПОСЛЕ await, а не до: заменять надо то, что стоит на момент подмены.
+    if (this.desiredModelByInstance.get(instanceId) !== modelObjectId) return;
+    const current = this.objectsById.get(instanceId);
+    if (!current || !this.zoneRoot) return;
 
     const interactable = OBJECTS_CATALOG[baseObjectId]?.interactable ?? false;
     const next = gltf.scene.clone(true);
