@@ -3,7 +3,10 @@ import * as THREE from "three";
 export const LIGHTING_CONFIG = {
   moonColor: 0x8fa6c9,
   moonIntensity: 1.5,
-  moonPosition: new THREE.Vector3(15, 25, 10),
+  // Знаки x/z намеренно противоположны исходным расчётам дизайнера (юго-восток,
+  // высота 54°, позиция геометрически позади spawnPoint) — так луна оказывается
+  // перед игроком при старте смены; дизайнер пересобирает sky_night.jpg под это.
+  moonPosition: new THREE.Vector3(-15, 25, -10),
   ambientColor: 0x1a2030,
   ambientIntensity: 0.6,
   fogColor: 0x0a0d14,

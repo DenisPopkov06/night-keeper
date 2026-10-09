@@ -16,6 +16,21 @@ export class ShiftManager {
   }
 
   startShift(config: ShiftConfig): void {
+    // Незавершённые задачи прошлой смены (время вышло раньше, чем игрок успел)
+    // иначе остались бы испорченными навсегда и не по заданию — новая смена их
+    // не перечисляет повторно (ShiftConfig.tasks переизбирается заново), а
+    // ObjectStateMachine ничего сама не забывает. ended=true на время сброса,
+    // чтобы handleStateChange не принял эти NORMAL-переходы за выполнение задач
+    // ещё активной (на этот момент) прошлой смены и не вызвал onShiftEnd повторно.
+    if (this.currentConfig) {
+      this.ended = true;
+      for (const task of this.currentConfig.tasks) {
+        if (!this.completedTaskIds.has(task.instanceId)) {
+          this.stateMachine.transition(task.instanceId, ObjectState.NORMAL);
+        }
+      }
+    }
+
     this.currentConfig = config;
     this.completedTaskIds.clear();
     this.ended = false;

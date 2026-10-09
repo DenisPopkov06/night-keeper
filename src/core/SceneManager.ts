@@ -36,6 +36,18 @@ const VARIANT_MODEL_BY_STATE: Partial<Record<string, Partial<Record<ObjectState,
   },
 };
 
+/** Для cross/arch/slab FALLEN показывает ту же "расколотую" модель, что и BROKEN
+ *  (отдельного визуала "упавшего, но целого" надгrobия пока нет, см. комментарий
+ *  выше) — значит, по факту это одно и то же состояние на экране и должно требовать
+ *  того же ремонта (удержание E, "почините"), а не мгновенного "поправить" как у
+ *  просто сдвинутого (DISPLACED) надгробия. У переносимых предметов (венки) FALLEN
+ *  выглядит иначе (запасной наклон, не "расколото") — для них это не относится. */
+function fallenLooksBroken(baseObjectId: string): boolean {
+  const variants = VARIANT_MODEL_BY_STATE[baseObjectId];
+  const fallenVariant = variants?.[ObjectState.FALLEN];
+  return fallenVariant !== undefined && fallenVariant === variants?.[ObjectState.BROKEN];
+}
+
 // Подвесной фонарь (lantern_iron_a): origin — точка подвеса, плафон висит на 0.68м ниже
 // (комментарий дизайнера в каталоге); у отдельной модели, в отличие от запечённой в зону,
 // нет своего источника света в .glb — добавляем его сами.
@@ -46,13 +58,22 @@ const LANTERN_HANG_OFFSET_Y = -0.68;
 // коллизия для этих именованных "крупных" деталей внутри нет считается по кругу,
 // построенному из реального bounding box (по имени меша из Blender). Луч здесь не
 // годится универсально — например, у скамьи тонкие ножки, луч на любой высоте может
-// пройти между ними, хотя по силуэту она сплошная. rocks_a сюда не входит — это один
-// слитый меш рассыпанной мелкой гальки на всю зону, а не отдельный валун.
+// пройти между ними, хотя по силуэту она сплошная (та же причина, по которой сквозь
+// крупный валун можно было пройти: приплюснутая икосфера невысокая, оба уровня луча
+// иногда проходят мимо). rocks_a сюда не входит — это один слитый меш рассыпанной
+// по всей зоне гальки (несколько кластеров по 1 крупному + 2-3 мелких валуна,
+// assets_src/blender/zone_lib.py build_rocks) — единый bounding box для него был бы
+// в размер всей зоны. Вместо этого для rocks_* считаем круг отдельно на каждый
+// "остров" геометрии (физически не соприкасающиеся валуны не делят вершины, см.
+// computeIslandCircles) и оставляем только острова крупнее ROCK_MIN_COLLISION_RADIUS —
+// мелкую гальку (r 0.14-0.34) можно спокойно перешагнуть, блокировать её не нужно.
 // tree_ намеренно не здесь: ствол дерева и так надёжно ловится лучом (проходит через
 // обе высоты), а bounding box дерева считается по всей кроне — круг получился бы
 // в разы шире реального ствола и сделал бы непроходимой зону, где физически пройти
 // можно (под кроной, в стороне от ствола).
 const STATIC_CIRCLE_NAME_PATTERNS = [/^lamp_post_/, /^barrels?_/, /^crates?_/, /^bench_wood/, /^pedestal_/];
+const ROCK_MESH_NAME_PATTERN = /^rocks_/;
+const ROCK_MIN_COLLISION_RADIUS = 0.4;
 
 function computeBoundingCircle(mesh: THREE.Mesh): CollisionCircle {
   mesh.geometry.computeBoundingBox();
@@ -61,6 +82,70 @@ function computeBoundingCircle(mesh: THREE.Mesh): CollisionCircle {
   const center = box.getCenter(new THREE.Vector3());
   const size = box.getSize(new THREE.Vector3());
   return { x: center.x, z: center.z, radius: Math.max(size.x, size.z) / 2 };
+}
+
+/** Разбивает один слитый меш на несвязные "острова" геометрии (например, отдельные
+ *  валуны в rocks_a, нигде физически не соприкасающиеся друг с другом — значит, не
+ *  делят вершины) и считает bounding-круг для каждого острова отдельно, в мировых
+ *  координатах. Группировка — по квантованной позиции вершины (а не по индексу),
+ *  чтобы одинаково работать и с indexed-, и с non-indexed-геометрией из экспортера. */
+function computeIslandCircles(mesh: THREE.Mesh, minRadius: number): CollisionCircle[] {
+  const position = mesh.geometry.attributes.position;
+  const index = mesh.geometry.index;
+  const triangleCount = (index ? index.count : position.count) / 3;
+  const vertexIndex = (t: number, corner: number): number =>
+    index ? index.getX(t * 3 + corner) : t * 3 + corner;
+  const keyOf = (i: number): string =>
+    `${Math.round(position.getX(i) * 1000)}_${Math.round(position.getY(i) * 1000)}_${Math.round(position.getZ(i) * 1000)}`;
+
+  const parent = new Map<string, string>();
+  const find = (key: string): string => {
+    let root = key;
+    while (parent.get(root) !== root) root = parent.get(root)!;
+    parent.set(key, root);
+    return root;
+  };
+  const union = (a: string, b: string): void => {
+    const rootA = find(a);
+    const rootB = find(b);
+    if (rootA !== rootB) parent.set(rootA, rootB);
+  };
+
+  const triangles: [number, number, number][] = [];
+  for (let t = 0; t < triangleCount; t++) {
+    const triangle: [number, number, number] = [vertexIndex(t, 0), vertexIndex(t, 1), vertexIndex(t, 2)];
+    triangles.push(triangle);
+    for (const i of triangle) {
+      const key = keyOf(i);
+      if (!parent.has(key)) parent.set(key, key);
+    }
+    union(keyOf(triangle[0]), keyOf(triangle[1]));
+    union(keyOf(triangle[1]), keyOf(triangle[2]));
+  }
+
+  const worldPoint = new THREE.Vector3();
+  const boundsByIsland = new Map<string, THREE.Box3>();
+  for (const triangle of triangles) {
+    for (const i of triangle) {
+      const root = find(keyOf(i));
+      let box = boundsByIsland.get(root);
+      if (!box) {
+        box = new THREE.Box3();
+        boundsByIsland.set(root, box);
+      }
+      worldPoint.set(position.getX(i), position.getY(i), position.getZ(i)).applyMatrix4(mesh.matrixWorld);
+      box.expandByPoint(worldPoint);
+    }
+  }
+
+  const circles: CollisionCircle[] = [];
+  for (const box of boundsByIsland.values()) {
+    const center = box.getCenter(new THREE.Vector3());
+    const size = box.getSize(new THREE.Vector3());
+    const radius = Math.max(size.x, size.z) / 2;
+    if (radius >= minRadius) circles.push({ x: center.x, z: center.z, radius });
+  }
+  return circles;
 }
 
 function disposeObject(root: THREE.Object3D): void {
@@ -109,6 +194,7 @@ export class SceneManager {
   ) {
     this.scene.add(createAmbientFill(), createMoonLight());
     this.scene.fog = createSceneFog();
+    this.loadSkyBackground();
 
     // MISSING сюда не входит — та позиция (spawnPosition) приходит из конкретной
     // задачи смены, а не выводится из одной лишь точки привязки, поэтому её
@@ -116,6 +202,24 @@ export class SceneManager {
     stateMachine.onChange((instanceId, state) => {
       if (state !== ObjectState.MISSING) this.handleStateChange(instanceId, state);
     });
+  }
+
+  /** Небо — равноугольная (equirectangular) панорама позади модели зоны. Туман не
+   *  затрагивает фон, а купол неба внутри самой модели зоны дизайнер закрасил бы
+   *  целиком, поэтому фон задаём отдельно, кодом (по просьбе дизайнера). Текстуру
+   *  может ещё не подвезти — как и с моделями, отсутствие файла не должно ронять
+   *  игру, просто фон останется чёрным, пока дизайнер не выложит sky_night.jpg. */
+  private loadSkyBackground(): void {
+    new THREE.TextureLoader().load(
+      "textures/sky_night.jpg",
+      (sky) => {
+        sky.mapping = THREE.EquirectangularReflectionMapping;
+        sky.colorSpace = THREE.SRGBColorSpace;
+        this.scene.background = sky;
+      },
+      undefined,
+      (error) => console.warn('[SceneManager] не удалось загрузить "textures/sky_night.jpg"', error),
+    );
   }
 
   async loadZone(layout: ZoneLayout): Promise<void> {
@@ -131,8 +235,11 @@ export class SceneManager {
       zoneRoot.add(zoneScene);
       this.staticGeometry = zoneScene;
       zoneScene.traverse((node) => {
-        if (node instanceof THREE.Mesh && STATIC_CIRCLE_NAME_PATTERNS.some((p) => p.test(node.name))) {
+        if (!(node instanceof THREE.Mesh)) return;
+        if (STATIC_CIRCLE_NAME_PATTERNS.some((p) => p.test(node.name))) {
           this.staticCollisionCircles.push(computeBoundingCircle(node));
+        } else if (ROCK_MESH_NAME_PATTERN.test(node.name)) {
+          this.staticCollisionCircles.push(...computeIslandCircles(node, ROCK_MIN_COLLISION_RADIUS));
         }
       });
     } catch (error) {
@@ -212,6 +319,13 @@ export class SceneManager {
    *  Использовать для подписей/текста (HUD и т.п.), а не для коллизий/моделей. */
   getBaseObjectId(instanceId: string): string | undefined {
     return this.baseObjectIdByInstance.get(instanceId);
+  }
+
+  /** См. fallenLooksBroken — нужен InteractionSystem, чтобы решить, какой текст
+   *  подсказки и какую механику (мгновенно/удержание) показать для FALLEN. */
+  isFallenLikeBroken(instanceId: string): boolean {
+    const baseObjectId = this.baseObjectIdByInstance.get(instanceId);
+    return baseObjectId !== undefined && fallenLooksBroken(baseObjectId);
   }
 
   /** Исходное место объекта в раскладке зоны (точка привязки у надгробия/вазы). */
