@@ -39,6 +39,10 @@
 //   - имя файла текстуры: <objectId>_albedo / _normal / _orm
 //   - у замкнутых мешей — одностороннее отображение (backface culling), без doubleSided
 //   - пропсы строит и запекает assets_src/blender/bake_props.py (тексты надписей — в словаре PROPS)
+//   - атмосфера зоны: за оградой лес (forest_near_* и forest_far_*, 620 деревьев разных видов) и рельеф с дальними холмами (terrain_outer) — прямо в zone_*.glb, плюс
+//     направленный лунный свет moon_light (KHR_lights_punctual, то же направление, что LIGHTING_CONFIG.moonPosition);
+//     небо с луной — public/textures/sky_night.jpg (equirect 4096×2048), строит assets_src/blender/sky_texture.py,
+//     подключается как scene.background (EquirectangularReflectionMapping + SRGBColorSpace)
 //   - детали зоны по отдельности (деревья, дом, ворота, фонарь, забор, бабочка, ...) — assets_src/blender/props_kit.py:
 //     та же геометрия и бесшовные тайлы, что в модели зоны; origin — центр основания, «перед» модели смотрит на +Z
 //   - зона: земля — ОДНА уникальная карта ground_old_cemetery_* (без тайлов и повторов); бесшовные тайлы tile_<имя>_albedo|normal|orm (дерево, кора, камень) —
