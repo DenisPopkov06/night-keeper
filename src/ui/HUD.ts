@@ -15,6 +15,7 @@ export interface HUDState {
   tasks: HUDTask[];
   interactionPrompt: string | null;
   nearestTaskDirection: HUDDirectionHint | null;
+  pointerLocked: boolean;
 }
 
 const LOW_TIME_THRESHOLD_SEC = 30;
@@ -41,8 +42,10 @@ export class HUD {
   private readonly compassEl: HTMLElement;
   private readonly compassArrowEl: HTMLElement;
   private readonly compassDistanceEl: HTMLElement;
+  private readonly pointerLockHint: HTMLElement;
 
   private lastChargePercent = -1;
+  private lastPointerLocked: boolean | null = null;
   private lastTimerText = "";
   private lastTasksSignature = "";
   private lastIsLowTime = false;
@@ -82,6 +85,10 @@ export class HUD {
     this.compassDistanceEl.className = "hud__compass-distance";
     this.compassEl.append(this.compassArrowEl, this.compassDistanceEl);
 
+    this.pointerLockHint = document.createElement("div");
+    this.pointerLockHint.className = "hud__hint hud__hint--pointer-lock";
+    this.pointerLockHint.textContent = "Клик — захватить курсор для обзора";
+
     this.root.append(
       flashlight,
       this.flashlightHint,
@@ -89,6 +96,7 @@ export class HUD {
       this.taskListEl,
       this.promptEl,
       this.compassEl,
+      this.pointerLockHint,
     );
     parent.appendChild(this.root);
   }
@@ -100,6 +108,7 @@ export class HUD {
     this.setTaskList(state.tasks);
     this.setInteractionPrompt(state.interactionPrompt);
     this.setCompass(state.nearestTaskDirection);
+    this.setPointerLockHint(state.pointerLocked);
   }
 
   private setFlashlightCharge(percent: number): void {
@@ -174,6 +183,14 @@ export class HUD {
     const degrees = (hint.bearingRadians * 180) / Math.PI;
     this.compassArrowEl.style.transform = `rotate(${degrees}deg)`;
     this.compassDistanceEl.textContent = `~${Math.round(hint.distanceMeters)} м`;
+  }
+
+  /** Без захвата курсора видимая мышь упирается в край экрана — поворот камеры
+   *  ограничен и выглядит "сломанным". Явно подсказываем, что нужно кликнуть. */
+  private setPointerLockHint(locked: boolean): void {
+    if (locked === this.lastPointerLocked) return;
+    this.lastPointerLocked = locked;
+    this.pointerLockHint.style.display = locked ? "none" : "";
   }
 
   destroy(): void {
