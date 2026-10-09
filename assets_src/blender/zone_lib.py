@@ -575,13 +575,7 @@ def build_trees(M=None):
         bm = bmesh.new()
         T = Matrix.Translation((cx, cy, 0)) @ Matrix.Diagonal((scale, scale, scale, 1))
         add_cone(bm, (0, 0, 1.8), 0.42, 0.22, 3.6, seg=9, M=T, tile=1.0, cyl=(cx, cy), rz=rnd.uniform(0, 1))
-        add_cone(bm, (0, 0, 0.22), 0.66, 0.42, 0.45, seg=9, M=T, tile=1.0, cyl=(cx, cy))
-        for k in range(6):                                                 # корни
-            az = k * 60 + rnd.uniform(-14, 14)
-            ln = rnd.uniform(0.9, 1.5)
-            Rt = (T @ Matrix.Translation((0, 0, 0.18)) @ Matrix.Rotation(math.radians(az), 4, "Z")
-                  @ Matrix.Rotation(math.radians(rnd.uniform(72, 84)), 4, "Y"))
-            add_cone(bm, (0, 0, ln / 2 + 0.2), 0.17, 0.04, ln, seg=5, M=Rt, tile=1.0)
+        add_cone(bm, (0, 0, 0.10), 0.72, 0.40, 0.70, seg=9, M=T, tile=1.0, cyl=(cx, cy))   # расширение ствола, уходит в землю на 0.25 м
         for az, tilt, ln in ((25, 40, 2.2), (150, 46, 2.0), (265, 36, 2.3), (80, 22, 1.6)):   # ветви в крону
             B = (T @ Matrix.Translation((0, 0, 2.9)) @ Matrix.Rotation(math.radians(az), 4, "Z")
                  @ Matrix.Rotation(math.radians(tilt), 4, "Y"))
@@ -595,7 +589,7 @@ def build_trees(M=None):
     cx, cy = DEAD_TREE
     T = Matrix.Translation((cx, cy, 0))
     add_cone(bm, (0, 0, 2.6), 0.34, 0.14, 5.2, seg=10, M=T, cyl=(cx, cy), rz=0.4)
-    add_cone(bm, (0, 0, 0.2), 0.58, 0.34, 0.4, seg=10, M=T, cyl=(cx, cy))
+    add_cone(bm, (0, 0, 0.08), 0.66, 0.325, 0.66, seg=10, M=T, cyl=(cx, cy))             # уходит в землю на 0.25 м
     for z0, az, tilt, ln, r in [(2.4, 20, 52, 2.4, 0.14), (3.1, 140, 46, 2.1, 0.12), (3.7, 250, 40, 2.3, 0.11),
                                 (4.2, 70, 28, 1.6, 0.08), (3.4, 320, 62, 1.5, 0.08), (4.8, 200, 18, 1.2, 0.06),
                                 (5.0, 330, 30, 1.0, 0.05)]:
@@ -899,7 +893,7 @@ def build_twigs(M=None):
             x, y = tx + math.cos(a) * d, ty + math.sin(a) * d
             if not blocked(x, y, grave_r=0.9, path_margin=0.3, gs=gs):
                 stick(x, y, rnd.uniform(0.4, 1.3), rnd.uniform(0.014, 0.03), rnd.uniform(0, 6.28))
-    stick(11.2, 11.4, 2.4, 0.07, 0.6)                                 # упавшая ветвь у сухого дерева
+    stick(9.9, 10.6, 2.2, 0.06, 2.0)                                  # упавшая ветвь неподалёку от сухого дерева (не у ствола — иначе похожа на корень)
     for _ in range(6):
         x, y = rnd.uniform(-17, 17), rnd.uniform(-17, 17)
         if not blocked(x, y, grave_r=0.9, path_margin=0.3, gs=gs):
@@ -1214,9 +1208,168 @@ def build_pedestal(M=None):
     return {"pedestal_cross_a": t}
 
 
+# ============================================================================ атмосфера: за оградой
+# Игровой туман — 5…40 м, цвет (10, 13, 20): всё за ~40 м сливается с небом (sky_texture.py), ближе — тёмные
+# силуэты леса в дымке. Поэтому лес стоит от 22 м, а рельеф за оградой уходит вверх, как котловина.
+FOREST_FROM = 22.5            # лес начинается за этим расстоянием (по Чебышёву) от центра зоны
+FOREST_TO = 58.0
+ROAD_X = lambda y: 0.9 * math.sin(y * 0.06)          # дорога от ворот на юг: ось по x в зависимости от y
+MOON_POS_GLTF = (15.0, 25.0, 10.0)                   # = LIGHTING_CONFIG.moonPosition (src/render/Lighting.ts), координаты glTF
+MOON_COLOR = (0.55, 0.68, 1.0)
+MOON_POWER = 1.0
+
+
+def _noise2(x, y):
+    return 0.5 + 0.5 * math.sin(x * 0.11 + 1.7) * math.cos(y * 0.13 + 0.6) + 0.25 * math.sin(x * 0.29 + y * 0.23)
+
+
+def outer_height(x, y):
+    """Рельеф за оградой: у ограды ровно, дальше мягкие холмы (до ~1.7 м к 46 м); у дороги на юге остаётся ровно."""
+    d = max(abs(x), abs(y))
+    h = _smooth(22.0, 46.0, d) * (0.4 + 1.3 * _noise2(x, y))
+    if y < -19.0:
+        h *= 0.2 + 0.8 * _smooth(3.0, 8.0, abs(x - ROAD_X(y)))
+    return h
+
+
+def _forest_floor(x, y):
+    """Цвет земли за оградой (линейный): тёмный мох с пятнами и земляная дорога, уходящая от ворот."""
+    n = 0.5 + 0.5 * math.sin(x * 0.7 + y * 0.45) * math.cos(y * 0.6 - x * 0.3)
+    moss = (0.014 + 0.012 * n, 0.024 + 0.014 * n, 0.012 + 0.006 * n)
+    if y < -19.0:
+        road = 1.0 - _smooth(1.0, 2.2, abs(x - ROAD_X(y)))
+        dirt = (0.046 + 0.01 * n, 0.036 + 0.008 * n, 0.026 + 0.006 * n)
+        return tuple(moss[i] * (1 - road) + dirt[i] * road for i in range(3))
+    return moss
+
+
+def build_terrain_outer(M=None):
+    """Земля за оградой: сетка 3 м от −60 до 60 (без внутреннего квадрата), цвета вершин, котловина к краям."""
+    M = M or mats()
+    clear("terrain_outer")
+    bm = bmesh.new()
+    lay = bm.loops.layers.float_color.new("Color")
+    n, step, lo = 40, 3.0, -60.0
+    verts = {}
+    def vert(i, j):
+        if (i, j) not in verts:
+            x, y = lo + i * step, lo + j * step
+            d = max(abs(x), abs(y))
+            verts[(i, j)] = bm.verts.new((x, y, outer_height(x, y) - 0.03 * (1.0 - _smooth(21.0, 24.0, d))))
+        return verts[(i, j)]
+    faces = []
+    for i in range(n):
+        for j in range(n):
+            cx, cy = lo + (i + 0.5) * step, lo + (j + 0.5) * step
+            if abs(cx) < 18.0 and abs(cy) < 18.0:
+                continue
+            faces.append(bm.faces.new((vert(i, j), vert(i + 1, j), vert(i + 1, j + 1), vert(i, j + 1))))
+    bmesh.ops.recalc_face_normals(bm, faces=faces)
+    for f in faces:
+        if f.normal.z < 0:
+            f.normal_flip()
+        for lp in f.loops:
+            c = _forest_floor(lp.vert.co.x, lp.vert.co.y)
+            lp[lay] = (*c, 1.0)
+    _, t = finish("terrain_outer", bm, [M["foliage"]])
+    return {"terrain_outer": t}
+
+
+def _vc_cone(bm, lay, c, r1, r2, depth, seg, rot, c0, c1):
+    """Конус/цилиндр вдоль Z с цветом вершин по высоте (c0 — снизу, c1 — сверху)."""
+    res = bmesh.ops.create_cone(bm, cap_ends=True, segments=seg, radius1=r1, radius2=r2, depth=depth,
+                                matrix=Matrix.Translation(c) @ Matrix.Rotation(rot, 4, "Z"))
+    z0 = c[2] - depth / 2
+    for f in _faces_of(res["verts"]):
+        for lp in f.loops:
+            k = min(max((lp.vert.co.z - z0) / depth, 0.0), 1.0)
+            col = tuple(c0[i] + (c1[i] - c0[i]) * k for i in range(3))
+            lp[lay] = (*col, 1.0)
+
+
+def _spruce(bm, lay, rnd, x, y, z, s):
+    """Ель: тонкий ствол и четыре яруса семигранных конусов (тёмный сине-зелёный), все цвета — вершинами."""
+    j = rnd.uniform(0.7, 1.3)
+    _vc_cone(bm, lay, (x, y, z + 1.2 * s), 0.30 * s, 0.12 * s, 3.2 * s, 6, rnd.random() * 6.28, (0.018, 0.013, 0.010), (0.024, 0.017, 0.012))
+    for k in range(4):
+        r = (1.75 - 0.38 * k) * s
+        h = 2.8 * s
+        jj = j * rnd.uniform(0.9, 1.1)
+        lo = (0.010 * jj, 0.024 * jj, 0.024 * jj)
+        hi = (0.021 * jj, 0.050 * jj, 0.044 * jj)
+        _vc_cone(bm, lay, (x, y, z + (1.5 + 1.7 * k) * s + h / 2), r, 0.0, h, 7, rnd.random() * 6.28, lo, hi)
+
+
+def _bare_tree(bm, lay, rnd, x, y, z, s):
+    """Голое дерево: кривой ствол и пять веток-конусов; тёмно-бурое."""
+    j = rnd.uniform(0.8, 1.25)
+    lo, hi = (0.020 * j, 0.015 * j, 0.012 * j), (0.032 * j, 0.024 * j, 0.018 * j)
+    _vc_cone(bm, lay, (x, y, z + 3.2 * s), 0.30 * s, 0.07 * s, 6.8 * s, 6, rnd.random() * 6.28, lo, hi)
+    for k in range(5):
+        az, tilt, ln = rnd.uniform(0, 360), rnd.uniform(38, 68), rnd.uniform(2.0, 3.4) * s
+        base = Vector((x, y, z + rnd.uniform(3.0, 5.8) * s))
+        B = Matrix.Translation(base) @ Matrix.Rotation(math.radians(az), 4, "Z") @ Matrix.Rotation(math.radians(tilt), 4, "Y")
+        res = bmesh.ops.create_cone(bm, cap_ends=True, segments=4, radius1=0.12 * s, radius2=0.03 * s, depth=ln,
+                                    matrix=B @ Matrix.Translation((0, 0, ln / 2)))
+        for f in _faces_of(res["verts"]):
+            for lp in f.loops:
+                lp[lay] = (*lo, 1.0)
+
+
+def build_forest(M=None, count=250, seed=61):
+    """Лес за оградой: ели и голые деревья (Poisson-разброс от 22.5 м до 58 м), на рельефе terrain_outer.
+    Ровный коридор — дорога от ворот на юг. Восемь секторов по азимуту — восемь мешей (отсечение по обзору)."""
+    M = M or mats()
+    clear("forest_ring_")
+    rnd = random.Random(seed)
+    bms = [bmesh.new() for _ in range(8)]
+    lays = [b.loops.layers.float_color.new("Color") for b in bms]
+    placed = []
+    tries = 0
+    while len(placed) < count and tries < 12000:
+        tries += 1
+        x, y = rnd.uniform(-FOREST_TO, FOREST_TO), rnd.uniform(-FOREST_TO, FOREST_TO)
+        if max(abs(x), abs(y)) < FOREST_FROM:
+            continue
+        if y < -19.0 and abs(x - ROAD_X(y)) < 4.2:
+            continue                                                     # дорога от ворот
+        if any((x - px) ** 2 + (y - py) ** 2 < 4.2 ** 2 for px, py in placed):
+            continue
+        placed.append((x, y))
+    stats = {"trees": len(placed)}
+    for x, y in placed:
+        sec = int(((math.atan2(y, x) + math.pi) / math.tau) * 8) % 8
+        z = outer_height(x, y) - 0.25
+        if rnd.random() < 0.13:
+            _bare_tree(bms[sec], lays[sec], rnd, x, y, z, rnd.uniform(0.9, 1.4))
+        else:
+            _spruce(bms[sec], lays[sec], rnd, x, y, z, rnd.uniform(0.75, 1.3))
+    for k, bm in enumerate(bms):
+        _, t = finish(f"forest_ring_0{k + 1}", bm, [M["foliage"]])
+        stats[f"forest_ring_0{k + 1}"] = t
+    return stats
+
+
+def build_moon_light():
+    """Лунный свет прямо в зоне: направленный, холодный, без теней (тени даёт луна из Lighting.ts — то же направление).
+    Уходит в .glb как KHR_lights_punctual; игра создаёт DirectionalLight сама. Позиция — по тому же направлению, что и диск на небе."""
+    clear("moon_light")
+    gx, gy, gz = MOON_POS_GLTF
+    pos = Vector((gx, -gz, gy)) * 4.0                                    # glTF (x, y, z) → Blender (x, −z, y)
+    data = bpy.data.lights.get("moon_light") or bpy.data.lights.new("moon_light", "SUN")
+    data.color, data.energy, data.angle = MOON_COLOR, MOON_POWER, math.radians(1.0)
+    obj = bpy.data.objects.new("moon_light", data)
+    obj.location = pos
+    obj.rotation_mode = "QUATERNION"
+    obj.rotation_quaternion = (-pos).normalized().to_track_quat("-Z", "Y")
+    collection().objects.link(obj)
+    return {"moon_light": tuple(round(v, 1) for v in pos), "intensity": MOON_POWER}
+
+
 STEPS = [build_ground, build_path_stones, build_mounds, build_fence, build_gate, build_trees, build_lamp,
          build_lantern_light, build_bench, build_house, build_house_details, build_house_lights, build_crates,
-         build_barrels, build_pots, build_pedestal, build_grass, build_flowers, build_rocks, build_twigs]
+         build_barrels, build_pots, build_pedestal, build_grass, build_flowers, build_rocks, build_twigs,
+         build_terrain_outer, build_forest, build_moon_light]
 
 
 def build_all():
