@@ -82,15 +82,14 @@ export class PlayerController {
       this.yawOnly.y = this.camera.rotation.y;
       this.moveInput.applyEuler(this.yawOnly);
       this.moveInput.multiplyScalar(this.moveSpeed * speedMultiplier * deltaSec);
-      // На пике прыжка перешагиваемые (vaultable) круги — надгробия, бочки, ящики,
-      // валуны — не блокируют; меши (забор/дом/ворота/скамья) и невысокие vaultable:
-      // false круги (фонарный столб и т.п.) остаются стеной и в прыжке.
-      const activeCircles =
-        this.jumpHeight > VAULT_CLEAR_HEIGHT ? collisionCircles.filter((c) => !c.vaultable) : collisionCircles;
-      this.moveWithCollision(this.moveInput, activeCircles, collisionMeshes);
+      this.moveWithCollision(this.moveInput, this.activeCircles(collisionCircles), collisionMeshes);
     }
 
     this.updateJump(deltaSec);
+    // Если прыжок перенёс игрока почти через надгробие/валун/бочку, но высоты не
+    // хватило пройти его целиком (приземлился ещё внутри minDist) — выталкиваем
+    // наружу сразу же, а не оставляем "застрявшим" до следующего прыжка.
+    this.resolveCircleOverlaps(this.activeCircles(collisionCircles));
 
     const { x: deltaX, y: deltaY } = this.input.consumeMouseDelta();
     this.camera.rotation.y -= deltaX * MOUSE_SENSITIVITY;
@@ -121,6 +120,37 @@ export class PlayerController {
     }
 
     this.camera.position.y = this.groundEyeY + this.jumpHeight;
+  }
+
+  /** На пике прыжка перешагиваемые (vaultable) круги — надгробия, бочки, ящики,
+   *  валуны — не блокируют; меши (забор/дом/ворота/скамья) и невысокие
+   *  vaultable: false круги (фонарный столб и т.п.) остаются стеной и в прыжке. */
+  private activeCircles(circles: readonly CollisionCircle[]): readonly CollisionCircle[] {
+    return this.jumpHeight > VAULT_CLEAR_HEIGHT ? circles.filter((c) => !c.vaultable) : circles;
+  }
+
+  /** Выталкивает игрока наружу, если он оказался внутри круга-коллайдера (а не просто
+   *  блокирует шаг туда, как isBlocked) — иначе застревание внутри (неудачное
+   *  приземление после прыжка через невысокий объект) было бы неисправимым без
+   *  повторного прыжка: любой шаг наружу тоже на долю секунды остаётся внутри
+   *  minDist и blocking-проверка в isBlocked его бы тоже отклонила. */
+  private resolveCircleOverlaps(circles: readonly CollisionCircle[]): void {
+    for (const circle of circles) {
+      const dx = this.camera.position.x - circle.x;
+      const dz = this.camera.position.z - circle.z;
+      const minDist = circle.radius + PLAYER_RADIUS;
+      const distSq = dx * dx + dz * dz;
+      if (distSq >= minDist * minDist) continue;
+
+      const dist = Math.sqrt(distSq);
+      if (dist < 1e-4) {
+        this.camera.position.x += minDist;
+        continue;
+      }
+      const push = (minDist - dist) / dist;
+      this.camera.position.x += dx * push;
+      this.camera.position.z += dz * push;
+    }
   }
 
   /** Двигает по осям раздельно (X, потом Z) — так движение вдоль стены не "залипает"
@@ -165,10 +195,13 @@ export class PlayerController {
       // высотах (глаза + низкий), чтобы не пропускать невысокие препятствия.
       this.tmpPerp.set(-this.tmpDirection.z, 0, this.tmpDirection.x).multiplyScalar(PLAYER_RADIUS);
 
+      // Высоты лучей — от groundEyeY (высоты глаз на земле), а не от текущего
+      // camera.position.y: иначе во время прыжка обе высоты уезжали бы вверх вместе
+      // с игроком и на пике могли бы пройти над забором/воротами — ровно то же
+      // самое правило коллизии (меш всегда стена), что и без прыжка.
       for (const heightDrop of [0, LOW_RAY_HEIGHT_DROP]) {
         for (const sign of [0, 1, -1]) {
-          this.tmpRayOrigin.copy(this.camera.position);
-          this.tmpRayOrigin.y -= heightDrop;
+          this.tmpRayOrigin.set(this.camera.position.x, this.groundEyeY - heightDrop, this.camera.position.z);
           if (sign !== 0) this.tmpRayOrigin.addScaledVector(this.tmpPerp, sign);
           this.raycaster.set(this.tmpRayOrigin, this.tmpDirection);
           if (this.raycaster.intersectObjects(meshes as THREE.Object3D[], true).length > 0) return true;
