@@ -47,4 +47,8 @@ export interface ObjectCatalogEntry {
   modelPath: string;
   interactable: boolean;
   repairableStates: ObjectState[];
+  /** Радиус коллизии (метры) для крупных непроходимых объектов — надгробия,
+   *  памятники и т.п. Не задан/отсутствует — объект не блокирует движение
+   *  (мелкие переносимые предметы вроде вазы сквозь которые можно пройти вплотную). */
+  collisionRadius?: number;
 }

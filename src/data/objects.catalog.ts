@@ -45,26 +45,34 @@ import { ObjectState, type ObjectCatalogEntry } from "@/data/types";
 
 const GRAVESTONE_STATES = [ObjectState.DISPLACED, ObjectState.FALLEN, ObjectState.BROKEN];
 
+// collisionRadius (м) — стартовая прикидка по типовому габариту надгробия,
+// дизайнер может поправить под реальные размеры моделей.
+const GRAVESTONE_COLLISION_RADIUS = 0.4;
+
 export const OBJECTS_CATALOG: Record<string, ObjectCatalogEntry> = {
   gravestone_cross_a: {
     modelPath: "models/props/gravestone_cross_a.glb",
     interactable: true,
     repairableStates: GRAVESTONE_STATES,
+    collisionRadius: GRAVESTONE_COLLISION_RADIUS,
   },
   gravestone_arch_a: {
     modelPath: "models/props/gravestone_arch_a.glb",
     interactable: true,
     repairableStates: GRAVESTONE_STATES,
+    collisionRadius: GRAVESTONE_COLLISION_RADIUS,
   },
   gravestone_slab_a: {
     modelPath: "models/props/gravestone_slab_a.glb",
     interactable: true,
     repairableStates: GRAVESTONE_STATES,
+    collisionRadius: GRAVESTONE_COLLISION_RADIUS,
   },
   vase_clay_01: {
     modelPath: "models/props/vase_clay_01.glb",
     interactable: true,
     repairableStates: [ObjectState.MISSING, ObjectState.DISPLACED],
+    // Без collisionRadius — маленький переносимый предмет, сквозь него проходить можно.
   },
   // ...остальные объекты по мере добавления дизайнером
 };
