@@ -113,6 +113,34 @@ def flat_material(name, rgb=(1, 1, 1), rough=0.8, metal=0.0, emission=None, cull
     return m
 
 
+def unlit_material(name, rgb, alpha=None):
+    """Неосвещаемый материал (glTF KHR_materials_unlit → MeshBasicMaterial): стекло, свеча, пламя фонаря.
+    Точечный свет стоит прямо внутри фонаря — освещаемые поверхности в 10 см от него пересвечиваются в белое.
+    Схема узлов — та, что экспортёр glTF узнаёт как unlit: [Transparent | LightPath-трюк(Emission)] по alpha."""
+    m = _fresh(name, True)
+    N, L = m.node_tree.nodes, m.node_tree.links
+    out, emit, lp = N.new("ShaderNodeOutputMaterial"), N.new("ShaderNodeEmission"), N.new("ShaderNodeLightPath")
+    emit.inputs["Color"].default_value = (*rgb, 1.0)
+    cam = N.new("ShaderNodeMixShader")
+    L.new(lp.outputs["Is Camera Ray"], cam.inputs[0])
+    L.new(N.new("ShaderNodeBsdfTransparent").outputs[0], cam.inputs[1])
+    L.new(emit.outputs[0], cam.inputs[2])
+    shader = cam.outputs[0]
+    if alpha is not None:
+        mix = N.new("ShaderNodeMixShader")
+        mix.inputs[0].default_value = alpha
+        L.new(N.new("ShaderNodeBsdfTransparent").outputs[0], mix.inputs[1])
+        L.new(shader, mix.inputs[2])
+        shader = mix.outputs[0]
+        if hasattr(m, "surface_render_method"):
+            m.surface_render_method = "BLENDED"
+        else:
+            m.blend_method = "BLEND"
+    L.new(shader, out.inputs["Surface"])
+    m.diffuse_color = (*rgb, 1.0 if alpha is None else alpha)
+    return m
+
+
 def mats(force=False):
     """Все материалы зоны. Уже созданные переиспользуются (иначе у готовых мешей слетают слоты)."""
     spec = {
@@ -134,8 +162,9 @@ def mats(force=False):
         "stone_vc": ("mat_tile_stone_moss", lambda n: tile_material(n, "tile_stone", vcolor=True)),
         "window": ("mat_window_glow", lambda n: flat_material(n, (1.0, 0.55, 0.2), rough=0.4,
                                                               emission=((1.0, 0.52, 0.18), 1.8))),
-        "glass": ("mat_lantern_glass", lambda n: flat_material(n, (1.0, 0.5, 0.15), rough=0.3,
-                                                              emission=((1.0, 0.52, 0.16), 2.2))),   # янтарь, не белый
+        "glass": ("mat_lantern_glass", lambda n: unlit_material(n, (1.0, 0.5, 0.14), alpha=0.5)),  # янтарное
+        "flame": ("mat_candle_flame", lambda n: unlit_material(n, (1.0, 0.86, 0.5))),
+        "candle": ("mat_candle_wax", lambda n: unlit_material(n, (0.85, 0.66, 0.42))),
     }
     return {k: (None if force else bpy.data.materials.get(n)) or mk(n) for k, (n, mk) in spec.items()}
 
@@ -566,34 +595,98 @@ def build_trees(M=None):
     return stats
 
 
+def add_torus(bm, M, R, r, seg=10, ring=4, mi=0):
+    """Тор в локальной плоскости XZ (ось — локальная Y): кольцо, крюк, звено цепи."""
+    verts = []
+    for i in range(seg):
+        a = i / seg * math.tau
+        row = []
+        for j in range(ring):
+            b = j / ring * math.tau
+            d = R + r * math.cos(b)
+            row.append(bm.verts.new(M @ Vector((d * math.cos(a), r * math.sin(b), d * math.sin(a)))))
+        verts.append(row)
+    faces = []
+    for i in range(seg):
+        for j in range(ring):
+            f = bm.faces.new((verts[i][j], verts[(i + 1) % seg][j], verts[(i + 1) % seg][(j + 1) % ring], verts[i][(j + 1) % ring]))
+            f.material_index = mi
+            faces.append(f)
+    bmesh.ops.recalc_face_normals(bm, faces=faces)
+    box_uv(faces, bm, 0.5)
+    return faces
+
+
+def _pyramid(bm, M, r_bottom, r_top, depth, mi):
+    res = bmesh.ops.create_cone(bm, cap_ends=True, segments=4, radius1=r_bottom, radius2=r_top, depth=depth,
+                                matrix=M @ Matrix.Rotation(math.pi / 4, 4, "Z"))
+    faces = _faces_of(res["verts"])
+    for f in faces:
+        f.material_index = mi
+    box_uv(faces, bm, 0.5)
+
+
+def _lantern(bm, top, s=1.0, rot=0.0, mi_iron=1, mi_glass=2, mi_flame=3, mi_candle=4):
+    """Классический подвесной фонарь (арт-лист): кольцо, пирамидальная крыша с карнизом, железная рама,
+    4 стекла, свеча с пламенем, поддон с каплей. top — точка подвеса; высота фонаря ≈ 0.68·s, центр стекла −0.41·s."""
+    T = Matrix.Translation(top) @ Matrix.Rotation(rot, 4, "Z") @ Matrix.Diagonal((s, s, s, 1))
+    add_torus(bm, T @ Matrix.Translation((0, 0, -0.035)), 0.032, 0.008, seg=10, ring=4, mi=mi_iron)   # кольцо
+    add_cone(bm, (0, 0, -0.08), 0.022, 0.012, 0.03, seg=6, M=T, mi=mi_iron, tile=0.5)                 # навершие
+    _pyramid(bm, T @ Matrix.Translation((0, 0, -0.17)), 0.22, 0.035, 0.15, mi_iron)                   # крыша
+    add_box(bm, (0, 0, -0.255), (0.31, 0.31, 0.022), T, tile=0.5, mi=mi_iron)                         # карниз
+    for sx in (-0.12, 0.12):
+        for sy in (-0.12, 0.12):
+            add_box(bm, (sx, sy, -0.41), (0.024, 0.024, 0.31), T, tile=0.5, mi=mi_iron)               # стойки
+    for z in (-0.27, -0.55):
+        for cx_, cy_, sx_, sy_ in ((0, 0.12, 0.26, 0.022), (0, -0.12, 0.26, 0.022), (0.12, 0, 0.022, 0.26), (-0.12, 0, 0.022, 0.26)):
+            add_box(bm, (cx_, cy_, z), (sx_, sy_, 0.022), T, tile=0.5, mi=mi_iron)                     # рамки
+    for cx_, cy_, sx_, sy_ in ((0, 0.116, 0.22, 0.006), (0, -0.116, 0.22, 0.006), (0.116, 0, 0.006, 0.22), (-0.116, 0, 0.006, 0.22)):
+        add_box(bm, (cx_, cy_, -0.41), (sx_, sy_, 0.27), T, uv=False, mi=mi_glass)                     # стёкла
+    add_cone(bm, (0, 0, -0.505), 0.024, 0.024, 0.07, seg=8, M=T, mi=mi_candle, tile=0.5)              # свеча
+    add_cone(bm, (0, 0, -0.448), 0.014, 0.0, 0.045, seg=6, M=T, mi=mi_flame, tile=0.5)                # пламя
+    _pyramid(bm, T @ Matrix.Translation((0, 0, -0.60)), 0.06, 0.19, 0.08, mi_iron)                    # поддон
+    add_cone(bm, (0, 0, -0.66), 0.028, 0.008, 0.04, seg=6, M=T, mi=mi_iron, tile=0.5)                 # капля
+
+
+def _chain(bm, M, links, link_len=0.055, mi=1):
+    """Цепь вниз от точки M: звенья-торы, каждое повёрнуто на 90° относительно соседнего."""
+    for k in range(links):
+        Mk = (M @ Matrix.Translation((0, 0, -link_len * (k + 0.5))) @ Matrix.Rotation(math.pi / 2 * (k % 2), 4, "Z")
+              @ Matrix.Diagonal((1, 1, 1.45, 1)))
+        add_torus(bm, Mk, 0.02, 0.0055, seg=8, ring=4, mi=mi)
+    return links * link_len
+
+
 def build_lamp(M=None):
-    """Деревянный фонарный столб с кронштейном и подвесным фонарём (светящееся стекло)."""
+    """Фонарный столб по арт-листу: столб на каменном основании с навершием, кронштейн с подкосом,
+    железная накладка на болтах, крюк, цепь и классический фонарь со свечой."""
     M = M or mats()
     clear("lamp_")
     bm = bmesh.new()
-    T = Matrix.Translation((3.5, -10.0, 0))
-    add_box(bm, (0, 0, 0.15), (0.34, 0.34, 0.3), T, tile=1.0)                       # основание
-    add_box(bm, (0, 0, 1.8), (0.2, 0.2, 3.3), T, tile=1.0)                          # столб
-    add_box(bm, (-0.5, 0, 3.22), (1.1, 0.12, 0.13), T, tile=1.0)                    # кронштейн к тропе (-X)
-    add_box(bm, (-0.25, 0, 2.95), (0.62, 0.09, 0.09), T @ Matrix.Rotation(math.radians(0), 4, "Y"), tile=1.0)
-    brace = T @ Matrix.Translation((-0.28, 0, 2.95)) @ Matrix.Rotation(math.radians(-42), 4, "Y")
-    add_box(bm, (0, 0, 0), (0.55, 0.08, 0.08), brace, tile=1.0)
-    lx = -1.0                                                                       # фонарь висит на конце кронштейна
-    add_box(bm, (lx, 0, 3.05), (0.02, 0.02, 0.22), T, tile=1.0, mi=1)                # подвес
-    add_box(bm, (lx, 0, 2.62), (0.30, 0.30, 0.04), T, tile=1.0, mi=1)                # дно
-    for sx in (-0.13, 0.13):
-        for sy in (-0.13, 0.13):
-            add_box(bm, (lx + sx, sy, 2.82), (0.03, 0.03, 0.38), T, tile=1.0, mi=1)  # стойки
-    res = bmesh.ops.create_cone(bm, cap_ends=True, segments=4, radius1=0.26, radius2=0.03, depth=0.2,
-                                matrix=T @ Matrix.Translation((lx, 0, 3.12)) @ Matrix.Rotation(math.pi / 4, 4, "Z"))
-    for f in _faces_of(res["verts"]):
-        f.material_index = 1
-    add_box(bm, (lx, 0, 2.82), (0.22, 0.22, 0.34), T, uv=False, mi=2)               # стекло (светится)
-    _, t = finish("lamp_post_a", bm, [M["wood"], M["iron"], M["glass"]])
-    return {"lamp_post_a": t, "light_at_blender": (3.5 + lx, -10.0, 2.82)}
+    px, py = 3.5, -10.0
+    T = Matrix.Translation((px, py, 0))
+    add_box(bm, (0, 0, 0.17), (0.4, 0.4, 0.34), T, tile=1.0, mi=5)                                    # основание (камень)
+    add_box(bm, (0, 0, 1.77), (0.22, 0.22, 3.06), T, tile=1.0)                                        # столб
+    _pyramid(bm, T @ Matrix.Translation((0, 0, 3.38)), 0.2, 0.02, 0.16, 0)                            # навершие
+    add_box(bm, (-0.52, 0, 3.05), (1.2, 0.14, 0.14), T, tile=1.0)                                     # кронштейн к тропе
+    a, b = Vector((-0.11, 0, 2.42)), Vector((-0.66, 0, 2.99))                                         # подкос
+    d = b - a
+    Mb = T @ Matrix.Translation((a + b) / 2) @ d.to_track_quat("X", "Z").to_matrix().to_4x4()
+    add_box(bm, (0, 0, 0), (d.length + 0.08, 0.1, 0.1), Mb, tile=1.0)
+    add_box(bm, (-0.126, 0, 2.98), (0.03, 0.26, 0.34), T, tile=0.5, mi=1)                             # железная накладка
+    for oy in (-0.08, 0.08):
+        for oz in (-0.11, 0.11):
+            add_box(bm, (-0.147, oy, 2.98 + oz), (0.02, 0.04, 0.04), T, tile=0.5, mi=1)               # болты
+    hook = T @ Matrix.Translation((-1.02, 0, 2.95))
+    add_torus(bm, hook, 0.03, 0.007, seg=10, ring=4, mi=1)                                             # крюк
+    drop = _chain(bm, hook @ Matrix.Translation((0, 0, -0.03)), 3)
+    top = T @ Vector((-1.02, 0, 2.92 - drop))
+    _lantern(bm, top, s=1.0, mi_iron=1, mi_glass=2, mi_flame=3, mi_candle=4)
+    _, t = finish("lamp_post_a", bm, [M["wood"], M["iron"], M["glass"], M["flame"], M["candle"], M["stone"]])
+    return {"lamp_post_a": t, "lantern_center": tuple(round(v, 3) for v in (top + Vector((0, 0, -0.41))))}
 
 
-LANTERN_POS = (2.5, -10.0, 2.82)       # Blender; в glTF = (2.5, 2.82, 10)
+LANTERN_POS = (2.48, -10.0, 2.345)     # центр стекла фонаря на столбе (Blender); в glTF = (2.48, 2.345, 10)
 LANTERN_COLOR = (1.0, 0.55, 0.22)       # тёплый свет свечи/масляной лампы
 LANTERN_POWER = 65.0                    # в экспорте RAW это число = PointLight.intensity в three.js (без пересчёта в канделы)
 
@@ -917,19 +1010,17 @@ def build_house_details(M=None):
     add_box(bm, (cx, y0 - 0.1 - 0.525, 0.1), (1.6, 0.35, 0.2), tile=1.0)
     _, stats["house_porch_a"] = finish("house_porch_a", bm, [M["stone_wall"]])
 
-    bm = bmesh.new()                                                     # фонарь у двери
-    lx, ly, lz = cx - 0.95, y0 - 0.32, 2.2
-    add_box(bm, (lx, y0 - 0.17, lz + 0.32), (0.04, 0.34, 0.04), tile=1.0)                  # кронштейн
-    add_box(bm, (lx, ly, lz + 0.22), (0.015, 0.015, 0.16), tile=1.0)                       # подвес
-    add_box(bm, (lx, ly, lz - 0.14), (0.2, 0.2, 0.03), tile=1.0)                           # дно
-    for sx in (-0.085, 0.085):
-        for sy in (-0.085, 0.085):
-            add_box(bm, (lx + sx, ly + sy, lz), (0.022, 0.022, 0.28), tile=1.0)
-    res = bmesh.ops.create_cone(bm, cap_ends=True, segments=4, radius1=0.17, radius2=0.02, depth=0.13,
-                                matrix=Matrix.Translation((lx, ly, lz + 0.2)) @ Matrix.Rotation(math.pi / 4, 4, "Z"))
-    box_uv(_faces_of(res["verts"]), bm, 1.0)
-    add_box(bm, (lx, ly, lz), (0.15, 0.15, 0.25), uv=False, mi=1)                          # стекло
-    _, stats["house_lantern_a"] = finish("house_lantern_a", bm, [M["iron"], M["glass"]])
+    bm = bmesh.new()                                                     # фонарь у двери (как на столбе, меньше)
+    lx = cx - 0.95
+    add_box(bm, (lx, y0 - 0.025, 2.62), (0.16, 0.03, 0.22), tile=0.5)                     # накладка на стене
+    add_box(bm, (lx, y0 - 0.22, 2.68), (0.035, 0.42, 0.035), tile=0.5)                   # кронштейн
+    pa, pb = Vector((lx, y0 - 0.03, 2.45)), Vector((lx, y0 - 0.26, 2.66))                 # подкос
+    dv = pb - pa
+    add_box(bm, (0, 0, 0), (dv.length + 0.04, 0.025, 0.025),
+            Matrix.Translation((pa + pb) / 2) @ dv.to_track_quat("X", "Z").to_matrix().to_4x4(), tile=0.5)
+    add_torus(bm, Matrix.Translation((lx, y0 - 0.40, 2.66)), 0.022, 0.005, seg=8, ring=4, mi=0)   # крюк
+    _lantern(bm, Vector((lx, y0 - 0.40, 2.64)), s=0.72, mi_iron=0, mi_glass=1, mi_flame=2, mi_candle=3)
+    _, stats["house_lantern_a"] = finish("house_lantern_a", bm, [M["iron"], M["glass"], M["flame"], M["candle"]])
 
     bm = bmesh.new()                                                     # брусчатка перед крыльцом
     x0, x1, py0, py1 = PATCH
@@ -953,7 +1044,7 @@ def build_house_lights():
     clear("house_light_")
     h = HOUSE
     out = {}
-    for name, pos, power, color in (("house_light_lantern", (h["cx"] - 0.95, h["y0"] - 0.32, 2.2), 30.0, LANTERN_COLOR),
+    for name, pos, power, color in (("house_light_lantern", (h["cx"] - 0.95, h["y0"] - 0.40, 2.345), 30.0, LANTERN_COLOR),
                                     ("house_light_window", (h["cx"] + 1.6, h["y0"] - 0.7, 1.9), 10.0, (1.0, 0.6, 0.28))):
         data = bpy.data.lights.get(name) or bpy.data.lights.new(name, "POINT")
         data.color, data.energy, data.shadow_soft_size = color, power, 0.1
