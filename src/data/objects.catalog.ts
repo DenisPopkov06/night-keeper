@@ -7,6 +7,7 @@
 //   - латиница, нижний регистр, snake_case, без пробелов и кириллицы
 //   - вариант — буква (a, b, c) или двузначный номер (01, 02)
 //   - примеры: gravestone_cross_a, vase_clay_01, fence_iron_02
+//   - «название» может быть составным (признак состояния — последним): gravestone_cross_broken_a, gravestone_arch_tilted_a
 //
 // Три имени обязаны совпадать:
 //   1) objectId — ключ в этом файле и поле objectId в layout.json
@@ -112,5 +113,23 @@ export const OBJECTS_CATALOG: Record<string, ObjectCatalogEntry> = {
   flowers_wild_a: decor("flowers_wild_a"),
   // Бабочка (размах 0.16 м), голова на +Z; в .glb анимация взмаха крыльев «flap» (0.25 с, по кругу).
   butterfly_blue_a: decor("butterfly_blue_a"),
+
+  // Варианты надгробий по арт-листу (assets_src/blender/bake_props.py, текстуры запечены): разрушенные —
+  // заготовки визуала для BROKEN/FALLEN вместо целого камня; наклонённые — «просевшая земля».
+  gravestone_cross_broken_a: decor("gravestone_cross_broken_a", 0.4),
+  gravestone_slab_broken_a: decor("gravestone_slab_broken_a", 0.6),
+  gravestone_rubble_a: decor("gravestone_rubble_a", 0.45),
+  gravestone_arch_broken_a: decor("gravestone_arch_broken_a", 0.4),
+  gravestone_cross_tilted_a: decor("gravestone_cross_tilted_a", 0.45),
+  gravestone_arch_tilted_a: decor("gravestone_arch_tilted_a", 0.45),
+  gravestone_headstone_tilted_a: decor("gravestone_headstone_tilted_a", 0.45),
+
+  // Венки (≈ 0.55 × 0.6 м с листьями, «лицом» к +Z, стоят на хвостах ленты — прислонить к надгробию) и цветы (пучки на земле).
+  wreath_fresh_a: decor("wreath_fresh_a"),
+  wreath_flower_a: decor("wreath_flower_a"),
+  wreath_withered_a: decor("wreath_withered_a"),
+  flowers_daisy_a: decor("flowers_daisy_a"),
+  flowers_bluebell_a: decor("flowers_bluebell_a"),
+  flowers_poppy_a: decor("flowers_poppy_a"),
   // ...остальные объекты по мере добавления дизайнером
 };
