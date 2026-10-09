@@ -9,9 +9,12 @@ export const LIGHTING_CONFIG = {
   moonPosition: new THREE.Vector3(-15, 25, -10),
   ambientColor: 0x1a2030,
   ambientIntensity: 0.6,
-  fogColor: 0x0a0d14,
+  // Раньше туман почти чёрный и обрывался на 40м — дальний лес за оградой читался
+  // сплошным тёмным силуэтом. Новые цифры (запрос дизайнера) растворяют его в
+  // несколько голубоватых слоёв в цвет горизонта sky_night.jpg, без шва неба и земли.
+  fogColor: 0x1c2c4c,
   fogNear: 5,
-  fogFar: 40,
+  fogFar: 62,
   shadowFrustumSize: 25,
   shadowMapSize: 1024,
 };
