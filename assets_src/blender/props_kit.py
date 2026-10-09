@@ -1,4 +1,5 @@
-"""Детали зоны по отдельности: дерево, фонарь, забор, дом, ворота, бабочка, ... — каждая в своём .glb.
+"""Детали зоны по отдельности: дерево, фонарь, забор, дом, ворота, бабочка, венки, цветы, ... — каждая в своём .glb.
+Надгробия (целые, разрушенные, наклонённые) и вазу запекает bake_props.py; сюда они подтягиваются для просмотра — import_graves().
 
 Сцена: assets_src/blender/props_kit.blend (создаётся из night_keeper_base.blend — new_kit_file()).
 Каждая модель — один объект, имя = objectId (соглашение в src/data/objects.catalog.ts), origin — центр
@@ -37,8 +38,21 @@ DISPLAY = {
     "pot_clay_a": (-7.0, -9.0, 0), "pedestal_cross_a": (-5.4, -9.0, 0), "rock_mossy_a": (-3.2, -9.0, 0),
     "rock_mossy_b": (-1.2, -9.0, 0), "grass_tuft_a": (0.2, -9.0, 0), "flowers_wild_a": (1.3, -9.0, 0),
     "lantern_iron_a": (2.6, -9.0, 1.3), "butterfly_blue_a": (3.8, -9.0, 1.0),
+    "wreath_fresh_a": (-1.6, -22.0, 0), "wreath_flower_a": (0.0, -22.0, 0), "wreath_withered_a": (1.6, -22.0, 0),
+    "flowers_daisy_a": (-1.6, -24.0, 0), "flowers_bluebell_a": (0.0, -24.0, 0), "flowers_poppy_a": (1.6, -24.0, 0),
 }
 ANIMATED = {"butterfly_blue_a"}
+# надгробия и ваза запекает bake_props.py (процедурные текстуры → albedo/normal/orm) и сам экспортирует в .glb;
+# здесь они только выложены для просмотра (импорт — import_graves()), в export_all() не входят
+GRAVES = {
+    "gravestone_cross_a": (-2.7, -15.0), "gravestone_arch_a": (-0.9, -15.0), "gravestone_slab_a": (0.9, -15.0),
+    "vase_clay_01": (2.7, -15.0),
+    "gravestone_cross_broken_a": (-2.7, -17.2), "gravestone_slab_broken_a": (-0.9, -17.2),
+    "gravestone_rubble_a": (0.9, -17.2), "gravestone_arch_broken_a": (2.7, -17.2),
+    "gravestone_cross_tilted_a": (-1.8, -19.4), "gravestone_arch_tilted_a": (0.0, -19.4),
+    "gravestone_headstone_tilted_a": (1.8, -19.4),
+}
+PROPS_BLEND = os.path.join(Z.HERE, "props_cemetery.blend")
 
 
 # ============================================================================ служебное
@@ -211,8 +225,33 @@ def build_small(M=None):
     return out
 
 
+# ============================================================================ венки и цветы
+def build_flora(M=None):
+    """Три венка (свежий, цветочный, увядший) и три пучка цветов (ромашки, колокольчики, маки); геометрия — props_flora.py."""
+    import props_flora
+    M = M or Z.mats()
+    Z.clear("wreath_", "flowers_daisy_", "flowers_bluebell_", "flowers_poppy_")
+    out = {}
+    for name, bm in (("wreath_fresh_a", props_flora.wreath("fresh")), ("wreath_flower_a", props_flora.wreath("flower")),
+                     ("wreath_withered_a", props_flora.wreath("withered")), ("flowers_daisy_a", props_flora.daisies()),
+                     ("flowers_bluebell_a", props_flora.bluebells()), ("flowers_poppy_a", props_flora.poppies())):
+        out[name] = place(Z.finish(name, bm, [M["blades"]])[0])
+    return out
+
+
+def import_graves():
+    """Надгробия и вазу — из props_cemetery.blend (с запечёнными материалами) в эту сцену, в ряды для просмотра."""
+    Z.clear(*GRAVES)
+    with bpy.data.libraries.load(PROPS_BLEND, link=False) as (src, dst):
+        dst.objects = [n for n in src.objects if n in GRAVES]
+    for o in dst.objects:
+        Z.collection().objects.link(o)
+        o.location = (*GRAVES[o.name], 0)
+    return {o.name: sum(len(p.vertices) - 2 for p in o.data.polygons) for o in dst.objects}
+
+
 # ============================================================================ бабочка
-WING = 0.075                 # длина крыла, м (размах ≈ 0.16 м)
+WING = 0.075                # длина крыла, м (размах ≈ 0.16 м)
 WING_SECTOR = (-112.0, 104.0)  # сектор крыла от поперечной оси, ° (+ — к голове)
 WING_TEX = "butterfly_blue_a_albedo.jpg"
 
@@ -358,7 +397,7 @@ def build_butterfly(M=None):
 
 # ============================================================================ всё и экспорт
 STEPS = [build_trees, build_house, build_gate, build_lamp, build_lantern, build_fence, build_bench, build_pedestal,
-         build_small, build_butterfly]
+         build_small, build_flora, build_butterfly]
 
 
 def build_all():
