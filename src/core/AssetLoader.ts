@@ -7,7 +7,9 @@ export class AssetLoader {
 
   constructor() {
     const dracoLoader = new DRACOLoader();
-    dracoLoader.setDecoderPath("/draco/");
+    // Абсолютный "/draco/" не сработал бы, если сборку разместят в подкаталоге
+    // (как иногда бывает на Яндекс Играх) — BASE_URL учитывает фактический base.
+    dracoLoader.setDecoderPath(`${import.meta.env.BASE_URL}draco/`);
     this.loader = new GLTFLoader();
     this.loader.setDRACOLoader(dracoLoader);
   }
