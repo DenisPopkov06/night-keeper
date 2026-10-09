@@ -95,13 +95,13 @@ def down(a, k):
     return a.reshape(h // k, k, w // k, k, *a.shape[2:]).mean(axis=(1, 3))
 
 
-def save_set(name, albedo, height, rough, ao, normal_strength, orm_stride=1, normal_stride=1):
+def save_set(name, albedo, height, rough, ao, normal_strength, orm_stride=1, normal_stride=1, metal=0.0):
     h, w = height.shape
     k = orm_stride
     maps = {
         "albedo": np.clip(albedo, 0, 1),
         "normal": down(normal_from_height(height, normal_strength), normal_stride),
-        "orm": down(np.stack([np.clip(ao, 0, 1), np.clip(rough, 0, 1), np.zeros_like(height)], axis=-1), k),
+        "orm": down(np.stack([np.broadcast_to(np.clip(c, 0, 1), height.shape) for c in (ao, rough, metal)], axis=-1), k),
     }
     for kind, rgb in maps.items():
         hh, ww = rgb.shape[:2]
@@ -123,7 +123,10 @@ def save_set(name, albedo, height, rough, ao, normal_strength, orm_stride=1, nor
 GN = 2048   # сторона карты земли, пикселей
 GM = 40.0   # сторона зоны, м  → ≈2 см на пиксель
 LAYOUT = os.path.join(bake_props.REPO, "src", "levels", "zone_old_cemetery", "layout.json")
-TREES = [(-11.0, 8.0, 6.0), (12.0, -7.0, 5.0), (13.0, 13.0, 3.4)]  # Blender x, y, радиус подстилки, м
+TREES = [(-11.0, 8.0, 6.0), (12.0, -7.0, 5.0), (13.0, 13.0, 3.4), (7.4, 17.3, 3.6)]
+PATH_END_Y = 13.2                      # главная тропа упирается в крыльцо дома
+YARD = (-4.4, 4.4, 12.4, 18.8)         # двор у дома (x0, x1, y0, y1), Blender
+WORN_SPOTS = [(-2.6, 6.6, 1.0)]        # вытоптанное пятно у основания креста (x, y, r)  # Blender x, y, радиус подстилки, м
 
 
 def fft_up(a, n_out):
@@ -224,11 +227,23 @@ def ground_unique():
     col = col * (1 - 0.88 * mound_m[..., None]) + mcol * 0.88 * mound_m[..., None]
     height += 0.05 * mound_m
 
-    # --- тропы (та же геометрия, что в zone_lib: главная от ворот на север и поперечная)
+    # --- утоптанный двор у дома и пятно у основания креста
+    x0, x1, y0, y1 = YARD
+    dyard = np.maximum(np.maximum(x0 - X, X - x1), np.maximum(y0 - Y, Y - y1)) + 0.45 * field(0.8, 160)
+    yard = 1 - sstep(-0.4, 0.3, dyard)
+    for wx0, wy0, wr in WORN_SPOTS:
+        yard = np.maximum(yard, 1 - sstep(-0.3, 0.3, np.hypot(X - wx0, Y - wy0) - wr + 0.3 * field(0.6, 161)))
+    ycol = lerp((0.19, 0.14, 0.095), (0.27, 0.20, 0.13), n01(field(0.6, 162), 0.3)) * (1 + 0.08 * fine[..., None])
+    spr2 = sstep(0.66, 0.76, n01(field(0.15, 163, 1.6), 0.3))[..., None]
+    ycol = ycol * (1 - 0.6 * spr2) + np.array((0.11, 0.17, 0.065)) * 0.6 * spr2
+    col = col * (1 - 0.9 * yard[..., None]) + ycol * 0.9 * yard[..., None]
+    height = height - 0.04 * yard
+
+    # --- тропы (та же геометрия, что в zone_lib: главная от ворот до крыльца дома и поперечная)
     i = (Y + 19.6) / 0.6
     xc = 0.4 * np.sin(i * 0.35)
-    w = (2.5 + 0.25 * np.sin(i * 0.5)) * (1 - 0.9 * sstep(46, 60, i))
-    sd_main = np.where((i < -1) | (i > 61), 9.0, np.abs(X - xc) - w / 2)
+    w = 2.5 + 0.25 * np.sin(i * 0.5)
+    sd_main = np.where(i < -1, 9.0, np.maximum(np.abs(X - xc) - w / 2, Y - PATH_END_Y))
     j = (X + 12) / 0.6
     yc = 4 + 0.3 * np.sin(j * 0.4)
     wc = np.maximum(2.0 * np.minimum(np.minimum(j / 4, (40 - j) / 4 + 0.15), 1.0) + 0.25, 0)
@@ -299,6 +314,177 @@ def tile_stone(n=512):
     return save_set("tile_stone", col, h, np.full((n, n), 0.9), 0.8 + 0.3 * (h - 0.5), 6.0)
 
 
+# ----------------------------------------------------------------------------- тайлы v2 (арт-лист пользователя)
+def _aniso_voronoi(n, count, seed, sx=1.0, sy=1.0):
+    """Периодический вороной с растяжением по осям (sx<1 — клетки шире по X)."""
+    r = np.random.default_rng(seed)
+    pts = r.random((count, 2)) * n
+    ys, xs = np.mgrid[0:n, 0:n].astype(np.float32)
+    d1 = np.full((n, n), 1e9, np.float32)
+    d2 = d1.copy()
+    idx = np.zeros((n, n), np.int32)
+    for i, (px, py) in enumerate(pts):
+        dx = np.abs(xs - px)
+        dx = np.minimum(dx, n - dx) * sx
+        dy = np.abs(ys - py)
+        dy = np.minimum(dy, n - dy) * sy
+        d = np.sqrt(dx * dx + dy * dy)
+        closer = d < d1
+        d2 = np.where(closer, d1, np.minimum(d2, d))
+        idx = np.where(closer, i, idx)
+        d1 = np.minimum(d1, d)
+    return d1, d2, idx
+
+
+def tile_planks(n=512):
+    """Горизонтальные доски (стены дома, ящики, бочки, жерди): 4 доски на тайл, стыки вразбежку, сучки."""
+    rng = np.random.default_rng(61)
+    rows = 4
+    bh = n // rows
+    y = np.arange(n)[:, None].repeat(n, 1)
+    x = np.arange(n)[None, :].repeat(n, 0)
+    row = y // bh
+    joint = rng.uniform(0, n, rows)[row]                       # вертикальный стык в каждой доске
+    shade = rng.uniform(0.82, 1.12, rows * 2)
+    seg = ((x - joint) % n > n / 2).astype(int) + row * 2      # две половинки доски — свой тон
+    grain = pnoise(n, 1.8, aniso=(9, 1), seed=62)
+    fine = pnoise(n, 1.3, aniso=(5, 1), seed=63)
+    t = n01(0.8 * grain + 0.3 * fine, 0.28)
+    col = lerp((0.21, 0.15, 0.10), (0.37, 0.27, 0.18), t) * shade[seg][..., None]
+    yy = y % bh
+    seam = np.exp(-((yy - 0) ** 2) / 6.0) + np.exp(-((yy - bh + 1) ** 2) / 6.0)
+    jx = np.abs(((x - joint + n / 2) % n) - n / 2)
+    seam = np.clip(seam + np.exp(-(jx ** 2) / 4.0), 0, 1)
+    knots = np.zeros((n, n))
+    for _ in range(7):                                         # сучки
+        kx, ky, kr = rng.uniform(0, n), rng.uniform(0, n), rng.uniform(5, 11)
+        dx = np.minimum(np.abs(x - kx), n - np.abs(x - kx)) / 1.8
+        dy = np.minimum(np.abs(y - ky), n - np.abs(y - ky))
+        knots = np.maximum(knots, np.clip(1 - np.hypot(dx, dy) / kr, 0, 1))
+    col = col * (1 - 0.55 * knots[..., None]) * (1 - 0.65 * seam[..., None])
+    h = 0.55 + 0.18 * grain + 0.08 * fine - 0.5 * seam - 0.15 * knots
+    rough = 0.82 + 0.1 * seam
+    alb = save_set("tile_planks", col, h, rough, 0.85 - 0.35 * seam, 5.0)
+    return alb
+
+
+def tile_shingles(n=512):
+    """Черепица/дранка крыши: 6 рядов, плитки разной ширины вразбежку, тень от нахлёста, мох."""
+    rng = np.random.default_rng(71)
+    rows = 6
+    rh = n // rows
+    y = np.arange(n)[:, None].repeat(n, 1)
+    x = np.arange(n)[None, :].repeat(n, 0)
+    row = y // rh
+    col = np.zeros((n, n, 3))
+    h = np.zeros((n, n))
+    ids = np.zeros((n, n), np.int32)
+    for r in range(rows):
+        cuts = np.sort(rng.uniform(0, n, rng.integers(5, 8)))
+        sel = row == r
+        xr = x[sel]
+        ids[sel] = np.searchsorted(cuts, xr) % len(cuts) + r * 16
+    tone = rng.uniform(0.78, 1.15, rows * 16)
+    v = (y % rh) / rh                                           # 0 — верх плитки, 1 — нижний край
+    base = lerp((0.17, 0.17, 0.19), (0.30, 0.29, 0.28), n01(pnoise(n, 2.0, seed=72), 0.3))
+    col = base * tone[ids][..., None]
+    # вертикальные щели между плитками
+    edge = np.zeros((n, n))
+    gx = np.abs(np.diff(ids, axis=1, append=ids[:, :1])) > 0
+    edge = np.maximum(edge, gx.astype(float))
+    edge = np.maximum(edge, np.roll(edge, 1, axis=1) * 0.6)
+    shadow = np.clip((v - 0.80) / 0.2, 0, 1) ** 1.5             # нижний край в тени следующего ряда
+    moss = sstep(0.70, 0.82, n01(pnoise(n, 2.4, seed=73), 0.3))[..., None] * 0.5
+    col = col * (1 - 0.6 * shadow[..., None]) * (1 - 0.6 * edge[..., None])
+    col = col * (1 - moss) + np.array((0.16, 0.24, 0.10)) * moss
+    h = 0.3 + 0.6 * v - 0.6 * shadow - 0.4 * edge + 0.05 * pnoise(n, 1.4, seed=74)
+    return save_set("tile_shingles", col, h, 0.85 + 0.0 * h, 0.85 - 0.4 * shadow, 6.0)
+
+
+def tile_stone_wall(n=512):
+    """Каменная кладка (фундамент, труба): плоские камни шире высоты, тёмный раствор, мох снизу."""
+    d1, d2, idx = _aniso_voronoi(n, 46, 81, sx=0.62, sy=1.0)
+    rng = np.random.default_rng(82)
+    tone = rng.uniform(0.0, 1.0, 46)
+    gap = 1 - sstep(1.5, 5.0, d2 - d1)
+    stone = lerp((0.30, 0.29, 0.28), (0.52, 0.50, 0.47), tone[idx])
+    fine = pnoise(n, 1.3, seed=83)
+    col = stone * (1 + 0.10 * fine[..., None])
+    col = col * (1 - gap[..., None]) + np.array((0.10, 0.09, 0.08)) * gap[..., None]
+    yv = np.arange(n)[:, None] / n                              # V=0 внизу
+    moss = sstep(0.62, 0.78, n01(pnoise(n, 2.4, seed=84), 0.3) + 0.25 * (1 - yv))[..., None] * 0.6
+    col = col * (1 - moss) + np.array((0.17, 0.27, 0.10)) * moss
+    dome = np.clip(d2 - d1, 0, 14) / 14
+    h = 0.35 + 0.4 * dome + 0.05 * fine - 0.4 * gap
+    return save_set("tile_stone_wall", col, h, 0.9 - 0.0 * h, 0.95 - 0.5 * gap, 7.0)
+
+
+def tile_cobble(n=512):
+    """Брусчатка (площадка у дома): округлые камни, земля и мох в швах."""
+    d1, d2, idx = _aniso_voronoi(n, 70, 91)
+    rng = np.random.default_rng(92)
+    tone = rng.uniform(0.0, 1.0, 70)
+    gap = 1 - sstep(2.0, 7.0, d2 - d1)
+    stone = lerp((0.33, 0.32, 0.31), (0.55, 0.53, 0.50), tone[idx]) * (1 + 0.08 * pnoise(n, 1.2, seed=93))[..., None]
+    soil = lerp((0.16, 0.12, 0.08), (0.14, 0.20, 0.08), sstep(0.5, 0.7, n01(pnoise(n, 2.0, seed=94), 0.3)))
+    col = stone * (1 - gap[..., None]) + soil * gap[..., None]
+    dome = np.clip(d2 - d1, 0, 18) / 18
+    h = 0.25 + 0.6 * dome ** 0.6 - 0.3 * gap
+    return save_set("tile_cobble", col, h, 0.85 + 0.1 * gap, 0.95 - 0.5 * gap, 6.0)
+
+
+def tile_metal(n=256):
+    """Тёмное кованое железо с ржавчиной (обручи бочек, петли, фонарь, болты)."""
+    base = n01(pnoise(n, 2.0, seed=101), 0.25)
+    rust = sstep(0.58, 0.75, n01(pnoise(n, 2.2, seed=102), 0.3))
+    col = lerp((0.09, 0.09, 0.10), (0.17, 0.17, 0.18), base)
+    col = col * (1 - rust[..., None]) + np.array((0.34, 0.17, 0.07)) * rust[..., None]
+    h = 0.5 + 0.1 * pnoise(n, 1.2, seed=103) + 0.1 * rust
+    return save_set("tile_metal", col, h, 0.55 + 0.35 * rust, 0.9 + 0.0 * h, 3.0, metal=0.85 - 0.75 * rust)
+
+
+def tile_leaves(n=512, count=1100):
+    """Листва для крон: сотни листьев разного оттенка поверх тёмной глубины кроны (бесшовно)."""
+    rng = np.random.default_rng(111)
+    col = np.zeros((n, n, 3)) + np.array((0.035, 0.07, 0.03))
+    h = np.zeros((n, n))
+    for _ in range(count):
+        cx, cy = rng.uniform(0, n), rng.uniform(0, n)
+        ln, wd = rng.uniform(16, 32), rng.uniform(7, 13)
+        a = rng.uniform(0, np.pi)
+        tone = rng.uniform(0, 1)
+        c = np.array((0.10, 0.21, 0.07)) * (1 - tone) + np.array((0.25, 0.39, 0.12)) * tone
+        r = int(ln) + 2
+        ys, xs = np.mgrid[-r:r + 1, -r:r + 1]
+        u = xs * np.cos(a) + ys * np.sin(a)
+        v = -xs * np.sin(a) + ys * np.cos(a)
+        t = np.clip(u / ln * 0.5 + 0.5, 0, 1)                    # 0..1 вдоль листа
+        half = wd * 0.5 * np.sin(np.pi * t) ** 0.8                # заострённые концы
+        inside = (np.abs(u) < ln) & (np.abs(v) < half)
+        bulge = np.where(inside, 1 - (v / np.maximum(half, 1e-3)) ** 2, 0)
+        vein = np.exp(-(v ** 2) / 1.2) * inside
+        yy = (ys + int(cy)) % n
+        xx = (xs + int(cx)) % n
+        depth = rng.uniform(0.3, 1.0)                              # верхние листья перекрывают нижние
+        m = inside & (depth + 0.3 * bulge > h[yy, xx])
+        shade = (0.75 + 0.35 * bulge - 0.15 * vein)[..., None]
+        col[yy[m], xx[m]] = (c * shade)[m]
+        h[yy[m], xx[m]] = (depth + 0.3 * bulge)[m]
+    return save_set("tile_leaves", col, h, 0.75 + 0.1 * (1 - h), 0.55 + 0.45 * np.clip(h, 0, 1), 5.0)
+
+
+def tile_clay(n=256):
+    """Терракота для горшков: тёплая глина, круги от гончарного круга, тёмные крапинки."""
+    yv = np.arange(n)[:, None] / n
+    rings = 0.5 + 0.5 * np.sin(yv * 2 * np.pi * 14 + 0.6 * pnoise(n, 2.0, seed=121))
+    t = n01(pnoise(n, 2.2, seed=122), 0.3)
+    col = lerp((0.42, 0.22, 0.12), (0.58, 0.33, 0.18), t) * (0.93 + 0.08 * rings)[..., None]
+    speck = sstep(0.82, 0.9, n01(pnoise(n, 0.8, seed=123), 0.3))[..., None]
+    col = col * (1 - 0.6 * speck)
+    h = 0.5 + 0.08 * rings + 0.05 * pnoise(n, 1.2, seed=124)
+    return save_set("tile_clay", col, h, 0.75 + 0.0 * h, 0.95 + 0.0 * h, 3.0)
+
+
 # ----------------------------------------------------------------------------- табличка
 def sign_texture(wood_col):
     w, h = 1024, 256
@@ -336,6 +522,7 @@ if __name__ == "__main__":
     wood_alb, wood_col = tile_wood()
     bark = tile_bark()
     stone = tile_stone()
+    v2 = [tile_planks(), tile_shingles(), tile_stone_wall(), tile_cobble(), tile_metal(), tile_leaves(), tile_clay()]
     sign_texture(wood_col)
-    contact_sheet([ground, wood_alb, bark, stone])
+    contact_sheet([ground, wood_alb, bark, stone] + v2)
     print("NK: done", flush=True)
