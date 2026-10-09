@@ -1,9 +1,13 @@
 import * as THREE from "three";
-import type { ZoneLayout, PlacedObject, Vec3 } from "@/data/types";
+import { ObjectState, type ZoneLayout, type PlacedObject, type Vec3 } from "@/data/types";
 import { OBJECTS_CATALOG } from "@/data/objects.catalog";
 import { AssetLoader } from "@/core/AssetLoader";
+import { ObjectStateMachine } from "@/systems/ObjectStateMachine";
 import { createAmbientFill, createMoonLight, createSceneFog } from "@/render/Lighting";
 import { createPlaceholderGround } from "@/render/MaterialsLib";
+
+const FALLEN_TILT_RADIANS = Math.PI / 2;
+const DISPLACED_OFFSET_RADIUS = 1.2;
 
 function disposeObject(root: THREE.Object3D): void {
   root.traverse((node) => {
@@ -33,9 +37,19 @@ export class SceneManager {
   private readonly interactableObjects: THREE.Object3D[] = [];
   private readonly objectsById = new Map<string, THREE.Object3D>();
 
-  constructor(private readonly assetLoader: AssetLoader) {
+  constructor(
+    private readonly assetLoader: AssetLoader,
+    stateMachine: ObjectStateMachine,
+  ) {
     this.scene.add(createAmbientFill(), createMoonLight());
     this.scene.fog = createSceneFog();
+
+    // MISSING сюда не входит — та позиция (spawnPosition) приходит из конкретной
+    // задачи смены, а не выводится из одной лишь точки привязки, поэтому её
+    // отдельно проставляет Game после ShiftManager.startShift().
+    stateMachine.onChange((instanceId, state) => {
+      if (state !== ObjectState.MISSING) this.applyStateVisual(instanceId, state);
+    });
   }
 
   async loadZone(layout: ZoneLayout): Promise<void> {
@@ -115,6 +129,41 @@ export class SceneManager {
   getAnchorTransform(instanceId: string): { position: Vec3; rotationY: number } | null {
     const placed = this.currentLayout?.objects.find((o) => o.instanceId === instanceId);
     return placed ? { position: placed.position, rotationY: placed.rotationY } : null;
+  }
+
+  /** Видимое представление состояния объекта — иначе FALLEN/DISPLACED меняют только
+   *  логику (ObjectStateMachine), а на сцене надгробие как ни в чём не бывало стоит
+   *  ровно. FALLEN — завален набок у своего места; DISPLACED — сдвинут в сторону от
+   *  точки привязки; любое другое (прежде всего NORMAL) — ровно на своём месте. */
+  private applyStateVisual(instanceId: string, state: ObjectState): void {
+    const object = this.objectsById.get(instanceId);
+    const anchor = this.getAnchorTransform(instanceId);
+    if (!object || !anchor) return;
+
+    const anchorRotationRad = THREE.MathUtils.degToRad(anchor.rotationY);
+
+    if (state === ObjectState.FALLEN) {
+      object.position.set(anchor.position.x, anchor.position.y, anchor.position.z);
+      object.rotation.set(0, anchorRotationRad, 0);
+      object.rotateZ(Math.random() < 0.5 ? FALLEN_TILT_RADIANS : -FALLEN_TILT_RADIANS);
+      return;
+    }
+
+    if (state === ObjectState.DISPLACED) {
+      const angle = Math.random() * Math.PI * 2;
+      object.position.set(
+        anchor.position.x + Math.cos(angle) * DISPLACED_OFFSET_RADIUS,
+        anchor.position.y,
+        anchor.position.z + Math.sin(angle) * DISPLACED_OFFSET_RADIUS,
+      );
+      object.rotation.set(0, anchorRotationRad, 0);
+      return;
+    }
+
+    // NORMAL (а также BROKEN/ANOMALY — те видимо отличаются текстурой/моделью,
+    // не трансформом) — объект ровно на своём авторском месте.
+    object.position.set(anchor.position.x, anchor.position.y, anchor.position.z);
+    object.rotation.set(0, anchorRotationRad, 0);
   }
 
   /** Телепортирует уже заспавненный инстанс на новую позицию без смены родителя —

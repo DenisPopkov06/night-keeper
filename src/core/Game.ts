@@ -26,12 +26,12 @@ export class Game {
   private readonly clock = new Clock();
   private readonly input = new InputManager();
   private readonly assetLoader = new AssetLoader();
-  readonly sceneManager = new SceneManager(this.assetLoader);
+  private readonly stateMachine = new ObjectStateMachine();
+  readonly sceneManager = new SceneManager(this.assetLoader, this.stateMachine);
 
   private readonly playerController: PlayerController;
   readonly flashlight = new FlashlightSystem();
   private readonly interaction: InteractionSystem;
-  private readonly stateMachine = new ObjectStateMachine();
   readonly shiftManager: ShiftManager;
   readonly hintSystem: HintSystem;
   private readonly saveSystem = new SaveSystem();
