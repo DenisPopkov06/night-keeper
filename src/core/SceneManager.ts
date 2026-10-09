@@ -42,6 +42,27 @@ const VARIANT_MODEL_BY_STATE: Partial<Record<string, Partial<Record<ObjectState,
 const LANTERN_OBJECT_ID = "lantern_iron_a";
 const LANTERN_HANG_OFFSET_Y = -0.68;
 
+// Статическая геометрия зоны — один слитый меш без отдельных PlacedObject, поэтому
+// коллизия для этих именованных "крупных" деталей внутри нет считается по кругу,
+// построенному из реального bounding box (по имени меша из Blender). Луч здесь не
+// годится универсально — например, у скамьи тонкие ножки, луч на любой высоте может
+// пройти между ними, хотя по силуэту она сплошная. rocks_a сюда не входит — это один
+// слитый меш рассыпанной мелкой гальки на всю зону, а не отдельный валун.
+// tree_ намеренно не здесь: ствол дерева и так надёжно ловится лучом (проходит через
+// обе высоты), а bounding box дерева считается по всей кроне — круг получился бы
+// в разы шире реального ствола и сделал бы непроходимой зону, где физически пройти
+// можно (под кроной, в стороне от ствола).
+const STATIC_CIRCLE_NAME_PATTERNS = [/^lamp_post_/, /^barrels?_/, /^crates?_/, /^bench_wood/, /^pedestal_/];
+
+function computeBoundingCircle(mesh: THREE.Mesh): CollisionCircle {
+  mesh.geometry.computeBoundingBox();
+  const box = mesh.geometry.boundingBox?.clone() ?? new THREE.Box3();
+  box.applyMatrix4(mesh.matrixWorld);
+  const center = box.getCenter(new THREE.Vector3());
+  const size = box.getSize(new THREE.Vector3());
+  return { x: center.x, z: center.z, radius: Math.max(size.x, size.z) / 2 };
+}
+
 function disposeObject(root: THREE.Object3D): void {
   root.traverse((node) => {
     if (node instanceof THREE.Mesh) {
@@ -80,6 +101,7 @@ export class SceneManager {
    *  инстансе, не меняется при подмене модели на разрушенный/наклонённый вариант. */
   private readonly baseObjectIdByInstance = new Map<string, string>();
   private readonly animationMixers = new Map<THREE.Object3D, THREE.AnimationMixer>();
+  private readonly staticCollisionCircles: CollisionCircle[] = [];
 
   constructor(
     private readonly assetLoader: AssetLoader,
@@ -108,6 +130,11 @@ export class SceneManager {
       enableShadows(zoneScene);
       zoneRoot.add(zoneScene);
       this.staticGeometry = zoneScene;
+      zoneScene.traverse((node) => {
+        if (node instanceof THREE.Mesh && STATIC_CIRCLE_NAME_PATTERNS.some((p) => p.test(node.name))) {
+          this.staticCollisionCircles.push(computeBoundingCircle(node));
+        }
+      });
     } catch (error) {
       // Контент приходит от дизайнера постепенно — отсутствующая/битая модель зоны
       // не должна ронять весь игровой цикл: оставляем плейсхолдер-землю вместо
@@ -167,6 +194,7 @@ export class SceneManager {
     }
     this.zoneRoot = null;
     this.staticGeometry = null;
+    this.staticCollisionCircles.length = 0;
     this.interactableObjects.length = 0;
     this.objectsById.clear();
     this.baseObjectIdByInstance.clear();
@@ -351,7 +379,7 @@ export class SceneManager {
    *  а не исходной позиции (DISPLACED/FALLEN/MISSING могут их сдвигать), и по
    *  актуально показанной модели (разбитый вариант может иметь другой радиус). */
   getCollisionCircles(): CollisionCircle[] {
-    const circles: CollisionCircle[] = [];
+    const circles: CollisionCircle[] = [...this.staticCollisionCircles];
     for (const object of this.objectsById.values()) {
       const objectId = object.userData.objectId as string | undefined;
       const radius = objectId ? OBJECTS_CATALOG[objectId]?.collisionRadius : undefined;
