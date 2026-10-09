@@ -103,6 +103,27 @@ export class InteractionSystem {
     return { instanceId: this.repairingInstanceId, remainingSec: this.repairRemainingSec };
   }
 
+  /** Текст подсказки под прицелом — что сделает E прямо сейчас (или null, если нечего). */
+  getInteractionPrompt(): string | null {
+    if (this.carriedObject) return "E — положить";
+
+    const instanceId = this.focusedRoot?.userData.instanceId as string | undefined;
+    if (!instanceId) return null;
+
+    if (this.repairingInstanceId === instanceId) return "Удерживайте E…";
+
+    switch (this.stateMachine.getState(instanceId)) {
+      case ObjectState.NORMAL:
+        return null;
+      case ObjectState.MISSING:
+        return "E — поднять";
+      case ObjectState.BROKEN:
+        return "Удерживайте E — починить";
+      default:
+        return "E — поправить";
+    }
+  }
+
   isCarrying(): boolean {
     return this.carriedObject !== null;
   }
