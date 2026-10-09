@@ -1,53 +1,6 @@
 import * as THREE from "three";
 import type { Vec3 } from "@/data/types";
 
-export interface HintCandidate {
-  instanceId: string;
-  position: Vec3;
-}
-
-/** Чистая функция без Three.js — какой из кандидатов ближе всего к игроку. */
-export function findNearestInstanceId(from: Vec3, candidates: readonly HintCandidate[]): string | null {
-  let nearestId: string | null = null;
-  let nearestDistSq = Infinity;
-
-  for (const candidate of candidates) {
-    const dx = candidate.position.x - from.x;
-    const dy = candidate.position.y - from.y;
-    const dz = candidate.position.z - from.z;
-    const distSq = dx * dx + dy * dy + dz * dz;
-    if (distSq < nearestDistSq) {
-      nearestDistSq = distSq;
-      nearestId = candidate.instanceId;
-    }
-  }
-
-  return nearestId;
-}
-
-function normalizeAngle(angle: number): number {
-  let a = angle % (Math.PI * 2);
-  if (a > Math.PI) a -= Math.PI * 2;
-  if (a < -Math.PI) a += Math.PI * 2;
-  return a;
-}
-
-/** Угол (радианы) от направления взгляда игрока (yaw камеры) до цели в плоскости XZ.
- *  0 — прямо по курсу, +PI/2 — справа, -PI/2 — слева, ±PI — за спиной. Чистая функция
- *  без Three.js, для блокнота смотрителя (раздел 6 ТЗ: "направление до ближайшей"). */
-export function relativeBearing(from: Vec3, to: Vec3, yawRadians: number): number {
-  const dx = to.x - from.x;
-  const dz = to.z - from.z;
-  const worldBearing = Math.atan2(dx, -dz);
-  return normalizeAngle(worldBearing + yawRadians);
-}
-
-export function distanceTo(from: Vec3, to: Vec3): number {
-  const dx = to.x - from.x;
-  const dz = to.z - from.z;
-  return Math.sqrt(dx * dx + dz * dz);
-}
-
 const MARKER_DURATION_SEC = 6;
 const MARKER_HEIGHT_OFFSET = 1.8;
 

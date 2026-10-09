@@ -11,7 +11,7 @@ import { InteractionSystem } from "@/systems/InteractionSystem";
 import { ObjectStateMachine } from "@/systems/ObjectStateMachine";
 import { ShiftManager, type ShiftEndReason } from "@/systems/ShiftManager";
 import { getShiftConfig } from "@/systems/DifficultyScaler";
-import { HintSystem, distanceTo, findNearestInstanceId, relativeBearing } from "@/systems/HintSystem";
+import { HintSystem } from "@/systems/HintSystem";
 import { SaveSystem } from "@/systems/SaveSystem";
 import { trackEvent } from "@/sdk/Analytics";
 import { showFullscreenAd } from "@/sdk/Ads";
@@ -161,7 +161,6 @@ export class Game {
       remainingSec: this.clock.getShiftRemainingSec(),
       tasks: this.buildHudTasks(),
       interactionPrompt: this.interaction.getInteractionPrompt(),
-      nearestTaskDirection: this.buildNearestTaskDirection(),
       // Пока открыт экран (пауза/итоги) — подсказка про захват курсора неуместна,
       // хоть курсор формально и не захвачен.
       pointerLocked:
@@ -181,37 +180,6 @@ export class Game {
         done: completed.has(task.instanceId),
       };
     });
-  }
-
-  /** Бесплатная общая подсказка блокнота смотрителя (раздел 6 ТЗ): примерное
-   *  направление + расстояние до ближайшей невыполненной задачи, без точной метки
-   *  (точная подсветка — платный HintSystem за rewarded-рекламу, это другое). */
-  private buildNearestTaskDirection(): { bearingRadians: number; distanceMeters: number } | null {
-    const config = this.shiftManager.getCurrentConfig();
-    if (!config) return null;
-
-    const completed = this.shiftManager.getCompletedTaskIds();
-    const playerPosition = new THREE.Vector3();
-    this.camera.getWorldPosition(playerPosition);
-
-    const candidates = config.tasks
-      .filter((task) => !completed.has(task.instanceId))
-      .map((task) => {
-        const object = this.sceneManager.getObjectByInstanceId(task.instanceId);
-        if (!object) return null;
-        const worldPos = object.getWorldPosition(new THREE.Vector3());
-        return { instanceId: task.instanceId, position: worldPos };
-      })
-      .filter((c): c is { instanceId: string; position: THREE.Vector3 } => c !== null);
-
-    const nearestId = findNearestInstanceId(playerPosition, candidates);
-    const nearest = candidates.find((c) => c.instanceId === nearestId);
-    if (!nearest) return null;
-
-    return {
-      bearingRadians: relativeBearing(playerPosition, nearest.position, this.camera.rotation.y),
-      distanceMeters: distanceTo(playerPosition, nearest.position),
-    };
   }
 
   private togglePause(): void {

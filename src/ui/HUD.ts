@@ -3,18 +3,12 @@ export interface HUDTask {
   done: boolean;
 }
 
-export interface HUDDirectionHint {
-  bearingRadians: number;
-  distanceMeters: number;
-}
-
 export interface HUDState {
   flashlightChargePercent: number;
   flashlightOn: boolean;
   remainingSec: number;
   tasks: HUDTask[];
   interactionPrompt: string | null;
-  nearestTaskDirection: HUDDirectionHint | null;
   pointerLocked: boolean;
   staminaPercent: number;
 }
@@ -40,9 +34,6 @@ export class HUD {
   private readonly timerEl: HTMLElement;
   private readonly taskListEl: HTMLElement;
   private readonly promptEl: HTMLElement;
-  private readonly compassEl: HTMLElement;
-  private readonly compassArrowEl: HTMLElement;
-  private readonly compassDistanceEl: HTMLElement;
   private readonly pointerLockHint: HTMLElement;
   private readonly staminaBar: HTMLElement;
 
@@ -54,7 +45,6 @@ export class HUD {
   private lastIsLowTime = false;
   private flashlightUsedOnce = false;
   private lastPrompt: string | null = "";
-  private lastCompassSignature = "";
 
   constructor(parent: HTMLElement) {
     this.root = document.createElement("div");
@@ -79,17 +69,6 @@ export class HUD {
     this.promptEl = document.createElement("div");
     this.promptEl.className = "hud__prompt";
 
-    this.compassEl = document.createElement("div");
-    this.compassEl.className = "hud__compass";
-    this.compassArrowEl = document.createElement("span");
-    this.compassArrowEl.className = "hud__compass-arrow";
-    // "▲" — сплошной равносторонний треугольник, при повороте почти не видно, куда
-    // именно он смотрит. "↑" — явный штрих+остриё, направление читается однозначно.
-    this.compassArrowEl.textContent = "↑";
-    this.compassDistanceEl = document.createElement("span");
-    this.compassDistanceEl.className = "hud__compass-distance";
-    this.compassEl.append(this.compassArrowEl, this.compassDistanceEl);
-
     this.pointerLockHint = document.createElement("div");
     this.pointerLockHint.className = "hud__hint hud__hint--pointer-lock";
     this.pointerLockHint.textContent = "Клик — захватить курсор для обзора";
@@ -107,7 +86,6 @@ export class HUD {
       this.timerEl,
       this.taskListEl,
       this.promptEl,
-      this.compassEl,
       this.pointerLockHint,
     );
     parent.appendChild(this.root);
@@ -119,7 +97,6 @@ export class HUD {
     this.setTimeRemaining(state.remainingSec);
     this.setTaskList(state.tasks);
     this.setInteractionPrompt(state.interactionPrompt);
-    this.setCompass(state.nearestTaskDirection);
     this.setPointerLockHint(state.pointerLocked);
     this.setStamina(state.staminaPercent);
   }
@@ -188,21 +165,6 @@ export class HUD {
     this.lastPrompt = prompt;
     this.promptEl.textContent = prompt ?? "";
     this.promptEl.style.display = prompt ? "" : "none";
-  }
-
-  /** Стрелка поворачивается на угол относительно текущего взгляда игрока (0 = прямо
-   *  по курсу) — это бесплатный общий ориентир блокнота, не точная метка. */
-  private setCompass(hint: HUDDirectionHint | null): void {
-    const signature = hint ? `${hint.bearingRadians.toFixed(2)}:${Math.round(hint.distanceMeters)}` : "";
-    if (signature === this.lastCompassSignature) return;
-    this.lastCompassSignature = signature;
-
-    this.compassEl.style.display = hint ? "" : "none";
-    if (!hint) return;
-
-    const degrees = (hint.bearingRadians * 180) / Math.PI;
-    this.compassArrowEl.style.transform = `rotate(${degrees}deg)`;
-    this.compassDistanceEl.textContent = `~${Math.round(hint.distanceMeters)} м`;
   }
 
   /** Без захвата курсора видимая мышь упирается в край экрана — поворот камеры
