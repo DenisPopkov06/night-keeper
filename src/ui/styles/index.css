@@ -1,5 +1,6 @@
 /* Точка входа стилей UI: подключается один раз из src/main.ts. */
 @import "./base.css";
 @import "./hud.css";
+@import "./interaction.css";
 @import "./shift-report.css";
 @import "./pause-menu.css";

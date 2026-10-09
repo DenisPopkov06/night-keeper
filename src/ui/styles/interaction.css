@@ -1,0 +1,42 @@
+/* .hud__prompt и .hud__compass — элементы, добавленные бэкендом позже hud.css,
+   поэтому своего позиционирования у них не было (наезжали на .hud__tasks).
+   Минимальная раскладка, чтобы не перекрывались; дизайнер может перестилизовать. */
+
+.hud__prompt {
+  position: absolute;
+  left: 50%;
+  top: calc(50% + 2.4em);
+  transform: translateX(-50%);
+  padding: 0.3em 0.8em;
+  font-size: clamp(13px, 2.4vmin, 17px);
+  white-space: nowrap;
+  background: var(--nk-bg);
+  border: 1px solid var(--nk-border);
+  border-radius: 999px;
+}
+
+.hud__compass {
+  position: absolute;
+  top: calc(env(safe-area-inset-top, 0px) + var(--nk-pad));
+  right: calc(env(safe-area-inset-right, 0px) + var(--nk-pad));
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.2em;
+  padding: 0.5em 0.8em;
+  background: var(--nk-bg);
+  border: 1px solid var(--nk-border);
+  border-radius: var(--nk-radius);
+}
+
+.hud__compass-arrow {
+  display: inline-block;
+  font-size: clamp(16px, 3vmin, 22px);
+  color: var(--nk-accent);
+  transition: transform 0.2s ease;
+}
+
+.hud__compass-distance {
+  font-size: clamp(11px, 2vmin, 13px);
+  color: var(--nk-muted);
+}
