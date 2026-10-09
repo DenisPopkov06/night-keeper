@@ -118,7 +118,11 @@ export class Game {
   };
 
   private update(deltaSec: number): void {
-    if (this.input.consumeKeyPress("Escape")) this.togglePause();
+    // Пока открыт экран итогов смены — Escape не должен открывать поверх него паузу,
+    // там и так уже всё остановлено, а курсор специально отпущен под клик по кнопке.
+    if (!this.shiftReportScreen.isVisible() && this.input.consumeKeyPress("Escape")) {
+      this.togglePause();
+    }
 
     const flashlightPressed = this.input.consumeKeyPress("KeyF");
     const interactPressed = this.input.consumeKeyPress("KeyE");
@@ -238,6 +242,9 @@ export class Game {
     this.clock.resume();
     trackEvent({ name: "shift_start", shiftIndex: this.currentShiftIndex });
     this.shiftReportScreen.hide();
+    // Курсор был отпущен под клик по кнопке "следующая смена" — захватываем обратно,
+    // чтобы не заставлять игрока кликать по канвасу ещё раз в начале смены.
+    this.input.requestPointerLock();
 
     this.currentShiftIndex += 1;
   }
@@ -245,6 +252,9 @@ export class Game {
   private onShiftEnd(reason: ShiftEndReason): void {
     this.clock.pause();
     this.interaction.forceDropCarried();
+    // Экран итогов смены кликабелен — без этого пришлось бы жать Escape вручную,
+    // чтобы вообще увидеть курсор и нажать "следующая смена".
+    this.input.exitPointerLock();
 
     const config = this.shiftManager.getCurrentConfig();
     const shiftIndex = config?.shiftIndex ?? 0;

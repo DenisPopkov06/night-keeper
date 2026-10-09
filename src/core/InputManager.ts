@@ -130,6 +130,12 @@ export class InputManager {
     return this.pointerLocked;
   }
 
+  /** Явно отпускает курсор — например, когда показывается экран итогов смены
+   *  и нужно кликнуть по кнопке "следующая смена", не нажимая Escape руками. */
+  exitPointerLock(): void {
+    if (document.pointerLockElement === this.target) document.exitPointerLock();
+  }
+
   isKeyDown(code: string): boolean {
     return this.keysDown.has(code);
   }
