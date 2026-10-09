@@ -113,6 +113,15 @@ def flat_material(name, rgb=(1, 1, 1), rough=0.8, metal=0.0, emission=None, cull
     return m
 
 
+def backdrop_material(name):
+    """Матовый материал на цветах вершин для рельефа и леса за оградой: roughness 1 и без бликов (specular 0) —
+    иначе скользящий свет луны даёт на земле «снежный» глянец (эффект Френеля)."""
+    m = flat_material(name, rough=1.0, vcolor=True)
+    bsdf = next(n for n in m.node_tree.nodes if n.type == "BSDF_PRINCIPLED")
+    bsdf.inputs["Specular IOR Level"].default_value = 0.0
+    return m
+
+
 def unlit_material(name, rgb, alpha=None):
     """Неосвещаемый материал (glTF KHR_materials_unlit → MeshBasicMaterial): стекло, свеча, пламя фонаря.
     Точечный свет стоит прямо внутри фонаря — освещаемые поверхности в 10 см от него пересвечиваются в белое.
@@ -165,6 +174,7 @@ def mats(force=False):
         "glass": ("mat_lantern_glass", lambda n: unlit_material(n, (1.0, 0.5, 0.14), alpha=0.5)),  # янтарное
         "flame": ("mat_candle_flame", lambda n: unlit_material(n, (1.0, 0.86, 0.5))),
         "candle": ("mat_candle_wax", lambda n: unlit_material(n, (0.85, 0.66, 0.42))),
+        "backdrop": ("mat_backdrop", backdrop_material),
     }
     return {k: (None if force else bpy.data.materials.get(n)) or mk(n) for k, (n, mk) in spec.items()}
 
@@ -1230,12 +1240,13 @@ def _noise2(x, y):
 
 
 def outer_height(x, y):
-    """Рельеф за оградой: у ограды ровно, дальше мягкие холмы (до ~1.7 м к 46 м) и большие дальние холмы (до 18 м);
+    """Рельеф за оградой: ровно, как поле, до 30 м от центра; дальше мягкие холмы и большие дальние холмы (до 18 м);
     у дороги на юг остаётся ровно."""
     d = max(abs(x), abs(y))
-    h = _smooth(22.0, 46.0, d) * (0.4 + 1.3 * _noise2(x, y))
+    h = _smooth(30.0, 58.0, d) * (0.3 + 1.2 * _noise2(x, y))
+    far = _smooth(34.0, 62.0, d)                                         # хвосты холмов не должны поднимать землю у ограды
     for hx, hy, hr, hh in HILLS:
-        h += hh * math.exp(-(((x - hx) ** 2 + (y - hy) ** 2) / hr ** 2) ** 1.0) * (0.85 + 0.3 * _noise2(x * 1.7, y * 1.7))
+        h += far * hh * math.exp(-((x - hx) ** 2 + (y - hy) ** 2) / hr ** 2) * (0.85 + 0.3 * _noise2(x * 1.7, y * 1.7))
     if y < -19.0:
         h *= 0.2 + 0.8 * _smooth(3.0, 8.0, abs(x - ROAD_X(y)))
     return h
@@ -1264,7 +1275,7 @@ def build_terrain_outer(M=None):
         if (i, j) not in verts:
             x, y = lo + i * step, lo + j * step
             d = max(abs(x), abs(y))
-            verts[(i, j)] = bm.verts.new((x, y, outer_height(x, y) - 0.03 * (1.0 - _smooth(21.0, 24.0, d))))
+            verts[(i, j)] = bm.verts.new((x, y, outer_height(x, y) - (0.03 if d < 19.99 else 0.0)))   # под полем — на 3 см ниже, у края вровень
         return verts[(i, j)]
     faces = []
     for i in range(n):
@@ -1280,7 +1291,7 @@ def build_terrain_outer(M=None):
         for lp in f.loops:
             c = _forest_floor(lp.vert.co.x, lp.vert.co.y)
             lp[lay] = (*c, 1.0)
-    _, t = finish("terrain_outer", bm, [M["foliage"]])
+    _, t = finish("terrain_outer", bm, [M["backdrop"]])
     return {"terrain_outer": t}
 
 
@@ -1352,11 +1363,13 @@ def _leafy(bm, lay, rnd, x, y, z, s):
 
 
 def _poplar(bm, lay, rnd, x, y, z, s):
-    """Тополь/кипарис: узкая высокая вытянутая крона."""
+    """Тополь/кипарис: узкая высокая крона — расширение в средней части и острая верхушка."""
     j = rnd.uniform(0.8, 1.2)
-    _vc_cone(bm, lay, (x, y, z + 1.0 * s), 0.22 * s, 0.12 * s, 2.6 * s, 6, rnd.random() * 6.28, *TRUNK)
-    _vc_blob(bm, lay, rnd, Vector((x, y, z + 6.2 * s)), (1.05 * s, 1.05 * s, 4.6 * s),
-             (0.012 * j, 0.032 * j, 0.020 * j), (0.026 * j, 0.062 * j, 0.034 * j), sub=2, jitter=0.10)
+    lo, mid, hi = (0.012 * j, 0.030 * j, 0.019 * j), (0.020 * j, 0.048 * j, 0.027 * j), (0.027 * j, 0.064 * j, 0.034 * j)
+    rot = rnd.random() * 6.28
+    _vc_cone(bm, lay, (x, y, z + 1.0 * s), 0.22 * s, 0.12 * s, 2.6 * s, 6, rot, *TRUNK)
+    _vc_cone(bm, lay, (x, y, z + 4.0 * s), 0.85 * s, 1.25 * s, 4.0 * s, 8, rot, lo, mid)
+    _vc_cone(bm, lay, (x, y, z + 8.6 * s), 1.25 * s, 0.0, 5.2 * s, 8, rot, mid, hi)
 
 
 def _bare_tree(bm, lay, rnd, x, y, z, s):
@@ -1388,21 +1401,28 @@ NEAR_KINDS = (("spruce", 26), ("spruce_tall", 14), ("fir", 14), ("leafy", 20), (
 FAR_KINDS = (("spruce_tall", 48), ("spruce", 30), ("leafy", 10), ("fir", 12))
 
 
-def _plant(bm, lay, rnd, kind, x, y, z, far):
+# (диапазон масштаба, радиус кроны на единицу масштаба — чтобы крона не нависала над полем)
+KIND_SCALE = {"spruce": (0.8, 1.3), "spruce_tall": (1.15, 1.75), "sapling": (0.38, 0.6), "fir": (0.85, 1.4),
+              "leafy": (0.8, 1.45), "poplar": (0.85, 1.4), "bare": (0.9, 1.4)}
+KIND_RADIUS = {"spruce": 1.8, "spruce_tall": 1.6, "sapling": 1.8, "fir": 2.6, "leafy": 4.4, "poplar": 1.2, "bare": 3.2}
+FENCE_CLEAR = 20.5            # крона любого дерева за оградой не должна заходить внутрь этого расстояния от центра
+
+
+def _plant(bm, lay, rnd, kind, x, y, z, s, far):
     if kind == "spruce":
-        _spruce(bm, lay, rnd, x, y, z, rnd.uniform(0.8, 1.3), 4, 6 if far else 7)
+        _spruce(bm, lay, rnd, x, y, z, s, 4, 6 if far else 7)
     elif kind == "spruce_tall":
-        _spruce(bm, lay, rnd, x, y, z, rnd.uniform(1.15, 1.75), 5, 6 if far else 7)
+        _spruce(bm, lay, rnd, x, y, z, s, 5, 6 if far else 7)
     elif kind == "sapling":
-        _spruce(bm, lay, rnd, x, y, z, rnd.uniform(0.38, 0.6), 4, 6)
+        _spruce(bm, lay, rnd, x, y, z, s, 4, 6)
     elif kind == "fir":
-        _fir(bm, lay, rnd, x, y, z, rnd.uniform(0.85, 1.4))
+        _fir(bm, lay, rnd, x, y, z, s)
     elif kind == "leafy":
-        _leafy(bm, lay, rnd, x, y, z, rnd.uniform(0.8, 1.45))
+        _leafy(bm, lay, rnd, x, y, z, s)
     elif kind == "poplar":
-        _poplar(bm, lay, rnd, x, y, z, rnd.uniform(0.85, 1.4))
+        _poplar(bm, lay, rnd, x, y, z, s)
     else:
-        _bare_tree(bm, lay, rnd, x, y, z, rnd.uniform(0.9, 1.4))
+        _bare_tree(bm, lay, rnd, x, y, z, s)
 
 
 def build_forest(M=None, seed=61):
@@ -1418,13 +1438,18 @@ def build_forest(M=None, seed=61):
     grid = {}
     placed = []
     tries = 0
-    while tries < 40000 and len(placed) < 620:
+    while tries < 60000 and len(placed) < 620:
         tries += 1
         x, y = rnd.uniform(-FOREST_TO, FOREST_TO), rnd.uniform(-FOREST_TO, FOREST_TO)
         d = max(abs(x), abs(y))
         if d < FOREST_FROM:
             continue
-        if y < -19.0 and abs(x - ROAD_X(y)) < 4.2:
+        far = d >= FOREST_NEAR_TO
+        kind = _pick(rnd, FAR_KINDS if far else NEAR_KINDS)
+        sc = rnd.uniform(*KIND_SCALE[kind])
+        if d < FENCE_CLEAR + KIND_RADIUS[kind] * sc:
+            continue                                                     # крона зашла бы над полем / забором
+        if y < -19.0 and abs(x - ROAD_X(y)) < 4.2 + KIND_RADIUS[kind] * sc * 0.5:
             continue                                                     # дорога от ворот
         gap = 4.0 if d < FOREST_NEAR_TO else 5.2
         gx, gy = int(x // cell), int(y // cell)
@@ -1432,17 +1457,14 @@ def build_forest(M=None, seed=61):
                for i in range(gx - 1, gx + 2) for j in range(gy - 1, gy + 2) for px, py in grid.get((i, j), ())):
             continue
         grid.setdefault((gx, gy), []).append((x, y))
-        placed.append((x, y))
+        placed.append((x, y, kind, sc, far))
     stats = {"trees": len(placed)}
-    for x, y in placed:
-        d = max(abs(x), abs(y))
-        far = d >= FOREST_NEAR_TO
+    for x, y, kind, sc, far in placed:
         key = (1 if far else 0, int(((math.atan2(y, x) + math.pi) / math.tau) * 8) % 8)
-        kind = _pick(rnd, FAR_KINDS if far else NEAR_KINDS)
-        _plant(bms[key], lays[key], rnd, kind, x, y, outer_height(x, y) - 0.25, far)
+        _plant(bms[key], lays[key], rnd, kind, x, y, outer_height(x, y) - 0.25, sc, far)
     for (b, s), bm in bms.items():
         name = f"forest_{'far' if b else 'near'}_0{s + 1}"
-        _, t = finish(name, bm, [M["foliage"]])
+        _, t = finish(name, bm, [M["backdrop"]])
         stats[name] = t
     stats["tris"] = sum(v for k, v in stats.items() if k.startswith("forest_"))
     return stats
