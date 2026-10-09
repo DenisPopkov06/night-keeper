@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import type { ZoneLayout, PlacedObject } from "@/data/types";
+import type { ZoneLayout, PlacedObject, Vec3 } from "@/data/types";
 import { OBJECTS_CATALOG } from "@/data/objects.catalog";
 import { AssetLoader } from "@/core/AssetLoader";
 import { createAmbientFill, createMoonLight, createSceneFog } from "@/render/Lighting";
@@ -31,6 +31,7 @@ export class SceneManager {
   private currentZoneId: string | null = null;
   private currentLayout: ZoneLayout | null = null;
   private readonly interactableObjects: THREE.Object3D[] = [];
+  private readonly objectsById = new Map<string, THREE.Object3D>();
 
   constructor(private readonly assetLoader: AssetLoader) {
     this.scene.add(createAmbientFill(), createMoonLight());
@@ -90,6 +91,7 @@ export class SceneManager {
     instance.userData.interactable = catalogEntry.interactable;
 
     parent.add(instance);
+    this.objectsById.set(placed.instanceId, instance);
     if (catalogEntry.interactable) this.interactableObjects.push(instance);
   }
 
@@ -100,8 +102,33 @@ export class SceneManager {
     }
     this.zoneRoot = null;
     this.interactableObjects.length = 0;
+    this.objectsById.clear();
     this.currentZoneId = null;
     this.currentLayout = null;
+  }
+
+  getObjectByInstanceId(instanceId: string): THREE.Object3D | undefined {
+    return this.objectsById.get(instanceId);
+  }
+
+  /** Исходное место объекта в раскладке зоны (точка привязки у надгробия/вазы). */
+  getAnchorTransform(instanceId: string): { position: Vec3; rotationY: number } | null {
+    const placed = this.currentLayout?.objects.find((o) => o.instanceId === instanceId);
+    return placed ? { position: placed.position, rotationY: placed.rotationY } : null;
+  }
+
+  /** Телепортирует уже заспавненный инстанс на новую позицию без смены родителя —
+   *  используется, чтобы "уронить в траву" пропавший предмет в начале смены (MISSING). */
+  relocateInstance(instanceId: string, position: Vec3): void {
+    this.objectsById.get(instanceId)?.position.set(position.x, position.y, position.z);
+  }
+
+  /** Возвращает предмет, который игрок нёс в руках, обратно в сцену зоны
+   *  (а не в scene напрямую — иначе он пережил бы выгрузку зоны и протёк бы в неё следующую). */
+  placeCarriedObject(object: THREE.Object3D, position: Vec3, rotationY: number): void {
+    this.zoneRoot?.add(object);
+    object.position.set(position.x, position.y, position.z);
+    object.rotation.set(0, THREE.MathUtils.degToRad(rotationY), 0);
   }
 
   getCurrentZoneId(): string | null {
