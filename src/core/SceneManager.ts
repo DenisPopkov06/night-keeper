@@ -9,6 +9,12 @@ import { createPlaceholderGround } from "@/render/MaterialsLib";
 const FALLEN_TILT_RADIANS = Math.PI / 2;
 const DISPLACED_OFFSET_RADIUS = 1.2;
 
+export interface CollisionCircle {
+  x: number;
+  z: number;
+  radius: number;
+}
+
 function disposeObject(root: THREE.Object3D): void {
   root.traverse((node) => {
     if (node instanceof THREE.Mesh) {
@@ -32,6 +38,7 @@ export class SceneManager {
   readonly scene = new THREE.Scene();
 
   private zoneRoot: THREE.Group | null = null;
+  private staticGeometry: THREE.Object3D | null = null;
   private currentZoneId: string | null = null;
   private currentLayout: ZoneLayout | null = null;
   private readonly interactableObjects: THREE.Object3D[] = [];
@@ -63,12 +70,15 @@ export class SceneManager {
       const zoneScene = zoneGltf.scene.clone(true);
       enableShadows(zoneScene);
       zoneRoot.add(zoneScene);
+      this.staticGeometry = zoneScene;
     } catch (error) {
       // Контент приходит от дизайнера постепенно — отсутствующая/битая модель зоны
       // не должна ронять весь игровой цикл: оставляем плейсхолдер-землю вместо
       // чёрной пустоты, пока дизайнер не выложит .glb.
       console.warn(`[SceneManager] не удалось загрузить модель зоны "${layout.modelPath}"`, error);
-      zoneRoot.add(createPlaceholderGround());
+      const placeholder = createPlaceholderGround();
+      zoneRoot.add(placeholder);
+      this.staticGeometry = placeholder;
     }
 
     await Promise.all(
@@ -115,6 +125,7 @@ export class SceneManager {
       disposeObject(this.zoneRoot);
     }
     this.zoneRoot = null;
+    this.staticGeometry = null;
     this.interactableObjects.length = 0;
     this.objectsById.clear();
     this.currentZoneId = null;
@@ -190,5 +201,25 @@ export class SceneManager {
 
   getInteractableObjects(): THREE.Object3D[] {
     return this.interactableObjects;
+  }
+
+  /** Статическая геометрия зоны (дерево/фонари/ограда и т.п., запечённые в модель
+   *  зоны дизайнером) — для коллизии игрока лучом вперёд по курсу движения. */
+  getStaticCollisionMeshes(): THREE.Object3D[] {
+    return this.staticGeometry ? [this.staticGeometry] : [];
+  }
+
+  /** Круги-коллайдеры для расставленных непроходимых объектов (надгробия и т.п.,
+   *  у которых в каталоге задан collisionRadius) — считается по их текущей,
+   *  а не исходной позиции (DISPLACED/FALLEN/MISSING могут их сдвигать). */
+  getCollisionCircles(): CollisionCircle[] {
+    const circles: CollisionCircle[] = [];
+    for (const object of this.objectsById.values()) {
+      const objectId = object.userData.objectId as string | undefined;
+      const radius = objectId ? OBJECTS_CATALOG[objectId]?.collisionRadius : undefined;
+      if (!radius) continue;
+      circles.push({ x: object.position.x, z: object.position.z, radius });
+    }
+    return circles;
   }
 }
