@@ -204,6 +204,11 @@ export class Game {
 
     this.playerController.teleportTo(layout.spawnPoint);
 
+    // Раскладка не должна быть одинаковой каждую смену — переставляем, кто где
+    // стоит (надгробия между собой, горшки между собой), до того как выбираем
+    // задания смены, чтобы они уже ссылались на актуальные позиции.
+    this.sceneManager.reshufflePlacedObjects();
+
     const config = getShiftConfig(this.currentShiftIndex, layout.zoneId, layout.objects);
     this.shiftManager.startShift(config);
 

@@ -160,6 +160,29 @@ function computeIslandCircles(mesh: THREE.Mesh, minRadius: number, vaultable: bo
   return circles;
 }
 
+/** "Надгробие"-категория для рандомизации раскладки — непроходимый ремонтируемый
+ *  объект (collisionRadius задан), а не переносимый мелкий предмет вроде горшка
+ *  (у pickup() он тоже repairable, но без collisionRadius). Выводится из каталога,
+ *  а не захардкожен по именам — новый тип надгробия дизайнера подхватится сам. */
+function isGravestoneLikeObjectId(objectId: string): boolean {
+  const entry = OBJECTS_CATALOG[objectId];
+  return !!entry && entry.repairableStates.length > 0 && entry.collisionRadius !== undefined;
+}
+
+/** Переносимый мелкий предмет заданий (горшок, венок, цветы) — тоже кандидат на
+ *  рандомизацию "где он стоит", но отдельной группой от надгробий (другой габарит). */
+function isPickupObjectId(objectId: string): boolean {
+  const entry = OBJECTS_CATALOG[objectId];
+  return !!entry && entry.interactable && entry.repairableStates.length > 0 && entry.collisionRadius === undefined;
+}
+
+function shuffleInPlace<T>(items: T[]): void {
+  for (let i = items.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [items[i], items[j]] = [items[j], items[i]];
+  }
+}
+
 function disposeObject(root: THREE.Object3D): void {
   root.traverse((node) => {
     if (node instanceof THREE.Mesh) {
@@ -353,6 +376,35 @@ export class SceneManager {
   getAnchorTransform(instanceId: string): { position: Vec3; rotationY: number } | null {
     const placed = this.currentLayout?.objects.find((o) => o.instanceId === instanceId);
     return placed ? { position: placed.position, rotationY: placed.rotationY } : null;
+  }
+
+  /** Перемешивает, кто где стоит — отдельно надгробия между собой и переносимые
+   *  предметы (горшки и т.п.) между собой (авторские "слоты" дизайнера остаются
+   *  теми же самыми местами, без путей/заборов, просто инстансы меняются местами),
+   *  чтобы раскладка зоны не была одинаковой каждую смену. Вызывать ДО
+   *  getShiftConfig() в начале смены — он сам прочитает уже перемешанный
+   *  currentLayout.objects, а обновлённые позиции сразу видны и на сцене. */
+  reshufflePlacedObjects(): void {
+    if (!this.currentLayout) return;
+    this.shuffleGroupPositions(isGravestoneLikeObjectId);
+    this.shuffleGroupPositions(isPickupObjectId);
+  }
+
+  private shuffleGroupPositions(matches: (objectId: string) => boolean): void {
+    if (!this.currentLayout) return;
+    const group = this.currentLayout.objects.filter((o) => matches(o.objectId));
+    const slots = group.map((o) => ({ position: o.position, rotationY: o.rotationY }));
+    shuffleInPlace(slots);
+
+    group.forEach((placed, i) => {
+      placed.position = slots[i].position;
+      placed.rotationY = slots[i].rotationY;
+
+      const instance = this.objectsById.get(placed.instanceId);
+      if (!instance) return;
+      instance.position.set(slots[i].position.x, slots[i].position.y, slots[i].position.z);
+      instance.rotation.y = THREE.MathUtils.degToRad(slots[i].rotationY);
+    });
   }
 
   private handleStateChange(instanceId: string, state: ObjectState): void {
