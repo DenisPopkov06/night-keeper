@@ -14,12 +14,13 @@
 import ast
 import math
 import os
+import random
 import re
 
 import bmesh
 import bpy
 import numpy as np
-from mathutils import Matrix
+from mathutils import Matrix, Vector
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.abspath(os.path.join(HERE, "..", ".."))
@@ -57,6 +58,44 @@ PROPS = {
         kind="clay", size=512, x=2.4, crack=0.7, moss=0.0, moss_h=0.1,
         colors=((0.34, 0.16, 0.08), (0.48, 0.25, 0.13)), text=None,
     ),
+    # --- разрушенные (арт-лист: крест, плита, разбитое надгробие, стела): больше трещин и мха, надпись местами утрачена
+    "gravestone_cross_broken_a": dict(
+        kind="stone", size=1024, x=-2.4, y=-1.8, crack=1.5, moss=1.0, moss_h=0.42,
+        colors=((0.11, 0.11, 0.12), (0.22, 0.21, 0.20)),
+        text=dict(lines=["ПОКОЙСЯ"], center=(0.0, 0.30), size=(0.20, 0.06), font=FONT_BOLD),
+    ),
+    "gravestone_slab_broken_a": dict(
+        kind="stone", size=1024, x=-0.8, y=-1.8, crack=1.6, moss=1.0, moss_h=0.34,
+        colors=((0.12, 0.12, 0.12), (0.22, 0.22, 0.21)), text=None,
+    ),
+    "gravestone_rubble_a": dict(
+        kind="stone", size=1024, x=0.8, y=-1.8, crack=1.7, moss=1.0, moss_h=0.45,
+        colors=((0.10, 0.10, 0.11), (0.21, 0.20, 0.19)),
+        text=dict(lines=["R.I.P."], center=(0.0, 0.26), size=(0.36, 0.10), font=FONT_BOLD),
+    ),
+    "gravestone_arch_broken_a": dict(
+        kind="stone", size=1024, x=2.4, y=-1.8, crack=1.5, moss=0.9, moss_h=0.36,
+        colors=((0.12, 0.12, 0.13), (0.23, 0.22, 0.21)),
+        text=dict(lines=["R.I.P.", "HENRY", "WELLS"], center=(0.0, 0.52), size=(0.36, 0.30), font=FONT_BOLD),
+    ),
+    # --- наклонённые (просевшая земля): центр надписи пересчитывается в geometry()
+    "gravestone_cross_tilted_a": dict(
+        kind="stone", size=1024, x=-1.6, y=-3.6, crack=1.0, moss=1.0, moss_h=0.38,
+        colors=((0.12, 0.12, 0.13), (0.23, 0.22, 0.21)),
+        text=dict(lines=["ПОКОЙСЯ С МИРОМ"], center=(0.0, 0.18), size=(0.46, 0.07), font=FONT_BOLD),
+    ),
+    "gravestone_arch_tilted_a": dict(
+        kind="stone", size=1024, x=0.0, y=-3.6, crack=1.1, moss=0.8, moss_h=0.34,
+        colors=((0.13, 0.13, 0.14), (0.24, 0.23, 0.22)),
+        text=dict(lines=["R.I.P.", "JOHN", "HALE", "1840 – 1902"], center=(0.0, 0.70),
+                  size=(0.42, 0.40), font=FONT_BOLD),
+    ),
+    "gravestone_headstone_tilted_a": dict(
+        kind="stone", size=1024, x=1.6, y=-3.6, crack=1.2, moss=0.9, moss_h=0.34,
+        colors=((0.11, 0.12, 0.12), (0.21, 0.21, 0.20)),
+        text=dict(lines=["†", "АННА", "ИВАНОВА", "1880 – 1925"], center=(0.0, 0.60),
+                  size=(0.46, 0.46), font=FONT_BOLD),
+    ),
 }
 
 
@@ -89,27 +128,150 @@ def make_object(name, bm, col):
     return obj
 
 
+def prism_z(bm, pts, z0, z1):
+    """Контур в плоскости XY (вид сверху), выдавленный по Z от z0 до z1. Возвращает вершины."""
+    lo = [bm.verts.new((x, y, z0)) for x, y in pts]
+    hi = [bm.verts.new((x, y, z1)) for x, y in pts]
+    bm.faces.new(lo[::-1])
+    bm.faces.new(hi)
+    for i in range(len(pts)):
+        j = (i + 1) % len(pts)
+        bm.faces.new((lo[i], lo[j], hi[j], hi[i]))
+    return lo + hi
+
+
+def chunk(bm, rnd, cx, cy, size, rise=0.4):
+    """Обломок: куб с поворотом и сдвинутыми вершинами; лежит на земле в (cx, cy)."""
+    sx, sy, sz = size
+    M = (Matrix.Translation((cx, cy, sz * rise)) @ Matrix.Rotation(rnd.uniform(0, math.tau), 4, "Z")
+         @ Matrix.Rotation(rnd.uniform(-0.45, 0.45), 4, "X") @ Matrix.Rotation(rnd.uniform(-0.45, 0.45), 4, "Y")
+         @ Matrix.Diagonal((sx, sy, sz, 1.0)))
+    amp = min(size) * 0.2
+    for v in bmesh.ops.create_cube(bm, size=1.0, matrix=M)["verts"]:
+        v.co += Vector((rnd.uniform(-amp, amp), rnd.uniform(-amp, amp), rnd.uniform(-amp, amp)))
+
+
+def tilt_mesh(bm, pitch, roll, sink=0.05):
+    """Наклон всего камня вокруг центра основания (pitch — вокруг X, roll — вокруг Y, градусы):
+    нижняя точка уходит в землю на sink. Возвращает матрицу и сдвиг по Z (для пересчёта позиции надписи)."""
+    R = Matrix.Rotation(math.radians(roll), 4, "Y") @ Matrix.Rotation(math.radians(pitch), 4, "X")
+    bmesh.ops.transform(bm, matrix=R, verts=bm.verts)
+    dz = -sink - min(v.co.z for v in bm.verts)
+    bmesh.ops.translate(bm, vec=(0, 0, dz), verts=bm.verts)
+    return R, dz
+
+
+def _cross(bm):  # крест на двухступенчатом цоколе, 1.14 м
+    box(bm, 0, 0, 0.06, 0.72, 0.42, 0.12)
+    box(bm, 0, 0, 0.18, 0.56, 0.32, 0.12)
+    dz = 0.09
+    extrude_profile(bm, [(x, z + dz) for x, z in [
+        (-0.10, 0.15), (0.10, 0.15), (0.10, 0.72), (0.28, 0.72), (0.28, 0.90), (0.10, 0.90), (0.10, 1.05),
+        (-0.10, 1.05), (-0.10, 0.90), (-0.28, 0.90), (-0.28, 0.72), (-0.10, 0.72)]], 0.13)
+
+
+def _arch(bm):  # арка на двухступенчатом основании, 1.08 м
+    box(bm, 0, 0, 0.05, 0.86, 0.36, 0.10)
+    box(bm, 0, 0, 0.15, 0.76, 0.30, 0.10)
+    arch = [(-0.30, 0.20), (0.30, 0.20)] + [
+        (0.30 * math.cos(math.radians(a)), 0.78 + 0.30 * math.sin(math.radians(a)))
+        for a in range(0, 181, 20)]
+    extrude_profile(bm, arch, 0.12)
+
+
+def _slab(bm):  # плита на основании, скол верхнего правого угла, 0.97 м
+    box(bm, 0, 0, 0.06, 0.84, 0.30, 0.12)
+    extrude_profile(bm, [(x, z + 0.12) for x, z in [
+        (-0.35, 0), (0.35, 0), (0.35, 0.70), (0.31, 0.74), (0.29, 0.83), (0.20, 0.85), (-0.27, 0.85),
+        (-0.35, 0.77)]], 0.14)
+
+
+def _headstone(bm):  # надгробие со скруглёнными плечами на каменном блоке, 1.07 м
+    box(bm, 0, 0, 0.06, 0.78, 0.32, 0.12)
+    extrude_profile(bm, [(x, z + 0.12) for x, z in [
+        (-0.30, 0), (0.30, 0), (0.30, 0.78), (0.25, 0.89), (0.13, 0.95), (-0.13, 0.95), (-0.25, 0.89),
+        (-0.30, 0.78)]], 0.15)
+
+
+def _cross_broken(bm, rnd):  # крест: нет верхушки и правой перекладины, обломок лежит у основания, 1.05 м
+    box(bm, 0, 0, 0.06, 0.72, 0.42, 0.12)
+    extrude_profile(bm, [(x, z + 0.12) for x, z in [
+        (-0.28, 0), (0.28, 0), (0.28, 0.06), (0.20, 0.12), (-0.28, 0.12)]], 0.32)   # второй цоколь, скол угла
+    dz = 0.09
+    extrude_profile(bm, [(x, z + dz) for x, z in [
+        (-0.10, 0.15), (0.10, 0.15), (0.10, 0.72), (0.17, 0.72), (0.20, 0.78), (0.16, 0.83), (0.21, 0.90),
+        (0.10, 0.90), (0.10, 0.94), (0.05, 0.97), (0.0, 0.93), (-0.06, 0.99), (-0.10, 0.95), (-0.10, 0.90),
+        (-0.28, 0.90), (-0.28, 0.72), (-0.10, 0.72)]], 0.13)
+    chunk(bm, rnd, 0.40, -0.32, (0.24, 0.13, 0.15))        # правая перекладина
+    chunk(bm, rnd, -0.36, -0.30, (0.13, 0.12, 0.09))
+    chunk(bm, rnd, 0.18, -0.38, (0.10, 0.09, 0.07))
+    chunk(bm, rnd, -0.12, -0.34, (0.07, 0.07, 0.06))
+
+
+def _slab_broken(bm, rnd):  # плоская плита-саркофаг: лопнула поперёк, обе половины осели, 0.33 м
+    box(bm, 0, 0, 0.07, 1.14, 0.66, 0.14)
+    box(bm, 0, 0, 0.20, 1.00, 0.54, 0.12)
+    left = [(-0.46, -0.22), (-0.03, -0.22), (0.0, -0.11), (-0.05, 0.0), (0.01, 0.11), (-0.03, 0.22), (-0.46, 0.22)]
+    right = [(0.46, -0.22), (0.46, 0.22), (0.03, 0.22), (0.07, 0.11), (0.02, 0.0), (0.08, -0.11), (0.05, -0.22)]
+    for pts, pivot, ang in ((left, (-0.46, 0, 0.30), 0.17), (right, (0.46, 0, 0.30), -0.15)):
+        verts = prism_z(bm, pts, 0.26, 0.33)
+        bmesh.ops.rotate(bm, cent=pivot, matrix=Matrix.Rotation(ang, 3, "Y"), verts=verts)
+    chunk(bm, rnd, 0.0, -0.44, (0.15, 0.10, 0.07))
+    chunk(bm, rnd, 0.50, -0.40, (0.11, 0.09, 0.08))
+    chunk(bm, rnd, -0.52, 0.36, (0.13, 0.10, 0.07))
+    chunk(bm, rnd, 0.02, 0.0, (0.12, 0.09, 0.05), rise=3.2)  # осколок прямо в трещине, на плите
+
+
+def _rubble(bm, rnd):  # разбитое надгробие: пенёк стелы и груда обломков, 0.45 м
+    box(bm, 0, 0, 0.05, 0.80, 0.40, 0.10)
+    extrude_profile(bm, [(x, z + 0.10) for x, z in [
+        (-0.28, 0), (0.28, 0), (0.28, 0.20), (0.22, 0.27), (0.25, 0.33), (0.12, 0.36), (0.14, 0.42), (0.0, 0.39),
+        (-0.08, 0.45), (-0.16, 0.38), (-0.28, 0.40)]], 0.13)
+    for cx, cy, size in ((0.30, -0.36, (0.24, 0.18, 0.16)), (-0.34, -0.33, (0.20, 0.16, 0.13)),
+                         (0.05, -0.44, (0.14, 0.12, 0.10)), (0.50, -0.14, (0.12, 0.11, 0.09)),
+                         (-0.52, -0.08, (0.15, 0.12, 0.11)), (-0.18, -0.30, (0.10, 0.09, 0.08)),
+                         (0.46, 0.30, (0.13, 0.11, 0.09)), (-0.30, 0.34, (0.11, 0.10, 0.08))):
+        chunk(bm, rnd, cx, cy, size)
+
+
+def _arch_broken(bm, rnd):  # стела с отколотым верхним правым углом, 1.04 м
+    box(bm, 0, 0, 0.05, 0.86, 0.36, 0.10)
+    box(bm, 0, 0, 0.15, 0.76, 0.30, 0.10)
+    top = [(0.30 * math.cos(math.radians(a)), 0.78 + 0.30 * math.sin(math.radians(a))) for a in (120, 140, 160, 180)]
+    extrude_profile(bm, [(-0.30, 0.20), (0.30, 0.20), (0.30, 0.60), (0.25, 0.66), (0.28, 0.74), (0.18, 0.80),
+                         (0.20, 0.90), (0.08, 0.94), (0.04, 1.03), (-0.14, 1.04)] + top, 0.12)
+    chunk(bm, rnd, 0.36, -0.40, (0.22, 0.15, 0.14))        # отколовшийся угол
+    chunk(bm, rnd, 0.56, -0.18, (0.12, 0.10, 0.08))
+    chunk(bm, rnd, -0.40, -0.34, (0.10, 0.09, 0.07))
+
+
 def geometry(name, col):
     bm = bmesh.new()
-    if name == "gravestone_cross_a":  # крест на двухступенчатом цоколе, 1.14 м
-        box(bm, 0, 0, 0.06, 0.72, 0.42, 0.12)
-        box(bm, 0, 0, 0.18, 0.56, 0.32, 0.12)
-        dz = 0.09
-        extrude_profile(bm, [(x, z + dz) for x, z in [
-            (-0.10, 0.15), (0.10, 0.15), (0.10, 0.72), (0.28, 0.72), (0.28, 0.90), (0.10, 0.90), (0.10, 1.05),
-            (-0.10, 1.05), (-0.10, 0.90), (-0.28, 0.90), (-0.28, 0.72), (-0.10, 0.72)]], 0.13)
-    elif name == "gravestone_arch_a":  # арка на двухступенчатом основании, 1.08 м
-        box(bm, 0, 0, 0.05, 0.86, 0.36, 0.10)
-        box(bm, 0, 0, 0.15, 0.76, 0.30, 0.10)
-        arch = [(-0.30, 0.20), (0.30, 0.20)] + [
-            (0.30 * math.cos(math.radians(a)), 0.78 + 0.30 * math.sin(math.radians(a)))
-            for a in range(0, 181, 20)]
-        extrude_profile(bm, arch, 0.12)
-    elif name == "gravestone_slab_a":  # плита на основании, скол верхнего правого угла, 0.97 м
-        box(bm, 0, 0, 0.06, 0.84, 0.30, 0.12)
-        extrude_profile(bm, [(x, z + 0.12) for x, z in [
-            (-0.35, 0), (0.35, 0), (0.35, 0.70), (0.31, 0.74), (0.29, 0.83), (0.20, 0.85), (-0.27, 0.85),
-            (-0.35, 0.77)]], 0.14)
+    rnd = random.Random(sum(map(ord, name)))  # обломки у каждого пропса свои, но воспроизводимые
+    tilt = None
+    if name == "gravestone_cross_a":
+        _cross(bm)
+    elif name == "gravestone_arch_a":
+        _arch(bm)
+    elif name == "gravestone_slab_a":
+        _slab(bm)
+    elif name == "gravestone_cross_broken_a":
+        _cross_broken(bm, rnd)
+    elif name == "gravestone_slab_broken_a":
+        _slab_broken(bm, rnd)
+    elif name == "gravestone_rubble_a":
+        _rubble(bm, rnd)
+    elif name == "gravestone_arch_broken_a":
+        _arch_broken(bm, rnd)
+    elif name == "gravestone_cross_tilted_a":
+        _cross(bm)
+        tilt = tilt_mesh(bm, 5, 12)
+    elif name == "gravestone_arch_tilted_a":
+        _arch(bm)
+        tilt = tilt_mesh(bm, -4, -10)
+    elif name == "gravestone_headstone_tilted_a":
+        _headstone(bm)
+        tilt = tilt_mesh(bm, 6, 17, sink=0.07)
     elif name == "vase_clay_01":  # токарный профиль, 16 граней, 0.285 м
         prof = [(0.0, 0.0), (0.060, 0.0), (0.085, 0.02), (0.100, 0.06), (0.112, 0.11), (0.113, 0.14),
                 (0.100, 0.18), (0.075, 0.215), (0.052, 0.238), (0.050, 0.250), (0.066, 0.272),
@@ -121,6 +283,12 @@ def geometry(name, col):
                        dvec=(0, 0, 0), angle=math.tau, space=Matrix(), steps=16, use_merge=True,
                        use_normal_flip=False, use_duplicate=False)
         bmesh.ops.remove_doubles(bm, verts=bm.verts, dist=0.0001)
+    if tilt and PROPS[name]["text"]:  # надпись задана в координатах объекта: переносим вместе с наклоном
+        R, dz = tilt
+        t = PROPS[name]["text"]
+        tx, tz = t.setdefault("center_upright", t["center"])  # исходный центр — чтобы повторный вызов не накапливал сдвиг
+        c = R @ Vector((tx, 0.0, tz))
+        t["center"] = (c.x, c.z + dz)
     obj = make_object(name, bm, col)
     if PROPS[name]["kind"] == "stone":  # фаски: ребро ловит свет, не «бумажный» край
         mod = obj.modifiers.new("nk_bevel", "BEVEL")
@@ -547,7 +715,7 @@ def main():
         log(n, "exported", os.path.getsize(out) // 1024, "KB")
 
     for n in names:  # в сцене — ряд для просмотра
-        objs[n].location = (PROPS[n]["x"], 0, 0)
+        objs[n].location = (PROPS[n]["x"], PROPS[n].get("y", 0), 0)
     sc.render.engine = "BLENDER_EEVEE"
     bpy.ops.wm.save_as_mainfile(filepath=OUT_BLEND, compress=False, relative_remap=True)
     log("saved", OUT_BLEND)

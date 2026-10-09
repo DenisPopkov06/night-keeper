@@ -113,6 +113,34 @@ def flat_material(name, rgb=(1, 1, 1), rough=0.8, metal=0.0, emission=None, cull
     return m
 
 
+def unlit_material(name, rgb, alpha=None):
+    """Неосвещаемый материал (glTF KHR_materials_unlit → MeshBasicMaterial): стекло, свеча, пламя фонаря.
+    Точечный свет стоит прямо внутри фонаря — освещаемые поверхности в 10 см от него пересвечиваются в белое.
+    Схема узлов — та, что экспортёр glTF узнаёт как unlit: [Transparent | LightPath-трюк(Emission)] по alpha."""
+    m = _fresh(name, True)
+    N, L = m.node_tree.nodes, m.node_tree.links
+    out, emit, lp = N.new("ShaderNodeOutputMaterial"), N.new("ShaderNodeEmission"), N.new("ShaderNodeLightPath")
+    emit.inputs["Color"].default_value = (*rgb, 1.0)
+    cam = N.new("ShaderNodeMixShader")
+    L.new(lp.outputs["Is Camera Ray"], cam.inputs[0])
+    L.new(N.new("ShaderNodeBsdfTransparent").outputs[0], cam.inputs[1])
+    L.new(emit.outputs[0], cam.inputs[2])
+    shader = cam.outputs[0]
+    if alpha is not None:
+        mix = N.new("ShaderNodeMixShader")
+        mix.inputs[0].default_value = alpha
+        L.new(N.new("ShaderNodeBsdfTransparent").outputs[0], mix.inputs[1])
+        L.new(shader, mix.inputs[2])
+        shader = mix.outputs[0]
+        if hasattr(m, "surface_render_method"):
+            m.surface_render_method = "BLENDED"
+        else:
+            m.blend_method = "BLEND"
+    L.new(shader, out.inputs["Surface"])
+    m.diffuse_color = (*rgb, 1.0 if alpha is None else alpha)
+    return m
+
+
 def mats(force=False):
     """Все материалы зоны. Уже созданные переиспользуются (иначе у готовых мешей слетают слоты)."""
     spec = {
@@ -134,8 +162,9 @@ def mats(force=False):
         "stone_vc": ("mat_tile_stone_moss", lambda n: tile_material(n, "tile_stone", vcolor=True)),
         "window": ("mat_window_glow", lambda n: flat_material(n, (1.0, 0.55, 0.2), rough=0.4,
                                                               emission=((1.0, 0.52, 0.18), 1.8))),
-        "glass": ("mat_lantern_glass", lambda n: flat_material(n, (1.0, 0.5, 0.15), rough=0.3,
-                                                              emission=((1.0, 0.52, 0.16), 2.2))),   # янтарь, не белый
+        "glass": ("mat_lantern_glass", lambda n: unlit_material(n, (1.0, 0.5, 0.14), alpha=0.5)),  # янтарное
+        "flame": ("mat_candle_flame", lambda n: unlit_material(n, (1.0, 0.86, 0.5))),
+        "candle": ("mat_candle_wax", lambda n: unlit_material(n, (0.85, 0.66, 0.42))),
     }
     return {k: (None if force else bpy.data.materials.get(n)) or mk(n) for k, (n, mk) in spec.items()}
 
@@ -411,6 +440,21 @@ def build_mounds(M=None):
     return {"grave_mounds": t, "count": count}
 
 
+def _fence_post(bm, P, hgt):
+    """Столб забора высотой hgt с пирамидальным навершием; P — положение основания."""
+    add_box(bm, (0, 0, hgt / 2), (0.16, 0.16, hgt), P, tile=1.0)
+    res = bmesh.ops.create_cone(bm, cap_ends=True, segments=4, radius1=0.15, radius2=0.0, depth=0.24,
+                                matrix=P @ Matrix.Translation((0, 0, hgt + 0.12)) @ Matrix.Rotation(math.pi / 4, 4, "Z"))
+    box_uv(_faces_of(res["verts"]), bm, 1.0)
+
+
+def _fence_rail(bm, R, step, off=(0, 0)):
+    """Жердь длиной на пролёт step с болтом на каждом конце; R — центр жерди."""
+    add_box(bm, (0, 0, 0), (step + 0.14, 0.05, 0.2), R, tile=1.0, mi=1, off=off)
+    for ex in (-step / 2, step / 2):
+        add_box(bm, (ex, 0.035, 0), (0.035, 0.03, 0.035), R, tile=1.0, mi=2)
+
+
 def build_fence(M=None):
     """Забор из жердей (арт-лист): столбы с пирамидальными навершиями, две широкие жерди на болтах; часть просела или выпала."""
     M = M or mats()
@@ -434,20 +478,14 @@ def build_fence(M=None):
         for i in range(bays + 1):                                          # столбы
             lean = Matrix.Rotation(rnd.uniform(-0.035, 0.035), 4, "X") @ Matrix.Rotation(rnd.uniform(-0.03, 0.03), 4, "Y")
             P = S @ Matrix.Translation((i * step, 0, 0)) @ lean
-            hgt = rnd.uniform(1.28, 1.42)
-            add_box(bm, (0, 0, hgt / 2), (0.16, 0.16, hgt), P, tile=1.0)
-            res = bmesh.ops.create_cone(bm, cap_ends=True, segments=4, radius1=0.15, radius2=0.0, depth=0.24,
-                                        matrix=P @ Matrix.Translation((0, 0, hgt + 0.12)) @ Matrix.Rotation(math.pi / 4, 4, "Z"))
-            box_uv(_faces_of(res["verts"]), bm, 1.0)
+            _fence_post(bm, P, rnd.uniform(1.28, 1.42))
         for i in range(bays):                                              # жерди
             for z in (0.55, 1.05):
                 if rnd.random() < 0.05:
                     continue                                               # выпала
                 sag = rnd.uniform(-0.03, 0.03) if rnd.random() < 0.88 else rnd.uniform(0.10, 0.18) * rnd.choice((-1, 1))
                 R = S @ Matrix.Translation(((i + 0.5) * step, 0.105, z)) @ Matrix.Rotation(sag, 4, "Y")
-                add_box(bm, (0, 0, 0), (step + 0.14, 0.05, 0.2), R, tile=1.0, mi=1, off=(rnd.random(), rnd.random()))
-                for ex in (-step / 2, step / 2):                           # болт на каждом конце
-                    add_box(bm, (ex, 0.035, 0), (0.035, 0.03, 0.035), R, tile=1.0, mi=2)
+                _fence_rail(bm, R, step, off=(rnd.random(), rnd.random()))
         _, stats[name] = finish(name, bm, [M["wood"], M["planks"], M["iron"]])
     return stats
 
@@ -522,13 +560,17 @@ def _leaf_crown(bm, rnd, center, rxy, rz, blobs, size):
                 lp[lay] = (tint[0] * j, tint[1] * j, tint[2] * j, 1.0)
 
 
+TREES = (("tree_oak_a", (-11.0, 8.0), 1.0, 41), ("tree_oak_b", (12.0, -7.0), 0.85, 42),
+         ("tree_leafy_c", (7.4, 17.3), 0.7, 44))                      # имя, (x, y), масштаб, seed
+DEAD_TREE = (13.0, 13.0)
+
+
 def build_trees(M=None):
     """Лиственные деревья с текстурой листвы (арт-лист) и сухое дерево. Корни, ветви, кора."""
     M = M or mats()
     clear("tree_")
     stats = {}
-    for name, (cx, cy), scale, seed in (("tree_oak_a", (-11.0, 8.0), 1.0, 41), ("tree_oak_b", (12.0, -7.0), 0.85, 42),
-                                        ("tree_leafy_c", (7.4, 17.3), 0.7, 44)):
+    for name, (cx, cy), scale, seed in TREES:
         rnd = random.Random(seed)
         bm = bmesh.new()
         T = Matrix.Translation((cx, cy, 0)) @ Matrix.Diagonal((scale, scale, scale, 1))
@@ -550,7 +592,7 @@ def build_trees(M=None):
         _, stats[name] = finish(name, bm, [M["bark"], M["leaves"]])
     rnd = random.Random(43)                                                # сухое дерево
     bm = bmesh.new()
-    cx, cy = 13.0, 13.0
+    cx, cy = DEAD_TREE
     T = Matrix.Translation((cx, cy, 0))
     add_cone(bm, (0, 0, 2.6), 0.34, 0.14, 5.2, seg=10, M=T, cyl=(cx, cy), rz=0.4)
     add_cone(bm, (0, 0, 0.2), 0.58, 0.34, 0.4, seg=10, M=T, cyl=(cx, cy))
@@ -566,34 +608,101 @@ def build_trees(M=None):
     return stats
 
 
+def add_torus(bm, M, R, r, seg=10, ring=4, mi=0):
+    """Тор в локальной плоскости XZ (ось — локальная Y): кольцо, крюк, звено цепи."""
+    verts = []
+    for i in range(seg):
+        a = i / seg * math.tau
+        row = []
+        for j in range(ring):
+            b = j / ring * math.tau
+            d = R + r * math.cos(b)
+            row.append(bm.verts.new(M @ Vector((d * math.cos(a), r * math.sin(b), d * math.sin(a)))))
+        verts.append(row)
+    faces = []
+    for i in range(seg):
+        for j in range(ring):
+            f = bm.faces.new((verts[i][j], verts[(i + 1) % seg][j], verts[(i + 1) % seg][(j + 1) % ring], verts[i][(j + 1) % ring]))
+            f.material_index = mi
+            faces.append(f)
+    bmesh.ops.recalc_face_normals(bm, faces=faces)
+    box_uv(faces, bm, 0.5)
+    return faces
+
+
+def _pyramid(bm, M, r_bottom, r_top, depth, mi):
+    res = bmesh.ops.create_cone(bm, cap_ends=True, segments=4, radius1=r_bottom, radius2=r_top, depth=depth,
+                                matrix=M @ Matrix.Rotation(math.pi / 4, 4, "Z"))
+    faces = _faces_of(res["verts"])
+    for f in faces:
+        f.material_index = mi
+    box_uv(faces, bm, 0.5)
+
+
+def _lantern(bm, top, s=1.0, rot=0.0, mi_iron=1, mi_glass=2, mi_flame=3, mi_candle=4):
+    """Классический подвесной фонарь (арт-лист): кольцо, пирамидальная крыша с карнизом, железная рама,
+    4 стекла, свеча с пламенем, поддон с каплей. top — точка подвеса; высота фонаря ≈ 0.68·s, центр стекла −0.41·s."""
+    T = Matrix.Translation(top) @ Matrix.Rotation(rot, 4, "Z") @ Matrix.Diagonal((s, s, s, 1))
+    add_torus(bm, T @ Matrix.Translation((0, 0, -0.035)), 0.032, 0.008, seg=10, ring=4, mi=mi_iron)   # кольцо
+    add_cone(bm, (0, 0, -0.08), 0.022, 0.012, 0.03, seg=6, M=T, mi=mi_iron, tile=0.5)                 # навершие
+    _pyramid(bm, T @ Matrix.Translation((0, 0, -0.17)), 0.22, 0.035, 0.15, mi_iron)                   # крыша
+    add_box(bm, (0, 0, -0.255), (0.31, 0.31, 0.022), T, tile=0.5, mi=mi_iron)                         # карниз
+    for sx in (-0.12, 0.12):
+        for sy in (-0.12, 0.12):
+            add_box(bm, (sx, sy, -0.41), (0.024, 0.024, 0.31), T, tile=0.5, mi=mi_iron)               # стойки
+    for z in (-0.27, -0.55):
+        for cx_, cy_, sx_, sy_ in ((0, 0.12, 0.26, 0.022), (0, -0.12, 0.26, 0.022), (0.12, 0, 0.022, 0.26), (-0.12, 0, 0.022, 0.26)):
+            add_box(bm, (cx_, cy_, z), (sx_, sy_, 0.022), T, tile=0.5, mi=mi_iron)                     # рамки
+    for cx_, cy_, sx_, sy_ in ((0, 0.116, 0.22, 0.006), (0, -0.116, 0.22, 0.006), (0.116, 0, 0.006, 0.22), (-0.116, 0, 0.006, 0.22)):
+        add_box(bm, (cx_, cy_, -0.41), (sx_, sy_, 0.27), T, uv=False, mi=mi_glass)                     # стёкла
+    add_cone(bm, (0, 0, -0.505), 0.024, 0.024, 0.07, seg=8, M=T, mi=mi_candle, tile=0.5)              # свеча
+    add_cone(bm, (0, 0, -0.448), 0.014, 0.0, 0.045, seg=6, M=T, mi=mi_flame, tile=0.5)                # пламя
+    _pyramid(bm, T @ Matrix.Translation((0, 0, -0.60)), 0.06, 0.19, 0.08, mi_iron)                    # поддон
+    add_cone(bm, (0, 0, -0.66), 0.028, 0.008, 0.04, seg=6, M=T, mi=mi_iron, tile=0.5)                 # капля
+
+
+def _chain(bm, M, links, link_len=0.055, mi=1):
+    """Цепь вниз от точки M: звенья-торы, каждое повёрнуто на 90° относительно соседнего."""
+    for k in range(links):
+        Mk = (M @ Matrix.Translation((0, 0, -link_len * (k + 0.5))) @ Matrix.Rotation(math.pi / 2 * (k % 2), 4, "Z")
+              @ Matrix.Diagonal((1, 1, 1.45, 1)))
+        add_torus(bm, Mk, 0.02, 0.0055, seg=8, ring=4, mi=mi)
+    return links * link_len
+
+
+LAMP_POS = (3.5, -10.0)                 # столб у тропы (Blender x, y)
+BENCH_T = ((-4.5, -6.0), 12.0)          # скамья: (x, y), поворот°
+
+
 def build_lamp(M=None):
-    """Деревянный фонарный столб с кронштейном и подвесным фонарём (светящееся стекло)."""
+    """Фонарный столб по арт-листу: столб на каменном основании с навершием, кронштейн с подкосом,
+    железная накладка на болтах, крюк, цепь и классический фонарь со свечой."""
     M = M or mats()
     clear("lamp_")
     bm = bmesh.new()
-    T = Matrix.Translation((3.5, -10.0, 0))
-    add_box(bm, (0, 0, 0.15), (0.34, 0.34, 0.3), T, tile=1.0)                       # основание
-    add_box(bm, (0, 0, 1.8), (0.2, 0.2, 3.3), T, tile=1.0)                          # столб
-    add_box(bm, (-0.5, 0, 3.22), (1.1, 0.12, 0.13), T, tile=1.0)                    # кронштейн к тропе (-X)
-    add_box(bm, (-0.25, 0, 2.95), (0.62, 0.09, 0.09), T @ Matrix.Rotation(math.radians(0), 4, "Y"), tile=1.0)
-    brace = T @ Matrix.Translation((-0.28, 0, 2.95)) @ Matrix.Rotation(math.radians(-42), 4, "Y")
-    add_box(bm, (0, 0, 0), (0.55, 0.08, 0.08), brace, tile=1.0)
-    lx = -1.0                                                                       # фонарь висит на конце кронштейна
-    add_box(bm, (lx, 0, 3.05), (0.02, 0.02, 0.22), T, tile=1.0, mi=1)                # подвес
-    add_box(bm, (lx, 0, 2.62), (0.30, 0.30, 0.04), T, tile=1.0, mi=1)                # дно
-    for sx in (-0.13, 0.13):
-        for sy in (-0.13, 0.13):
-            add_box(bm, (lx + sx, sy, 2.82), (0.03, 0.03, 0.38), T, tile=1.0, mi=1)  # стойки
-    res = bmesh.ops.create_cone(bm, cap_ends=True, segments=4, radius1=0.26, radius2=0.03, depth=0.2,
-                                matrix=T @ Matrix.Translation((lx, 0, 3.12)) @ Matrix.Rotation(math.pi / 4, 4, "Z"))
-    for f in _faces_of(res["verts"]):
-        f.material_index = 1
-    add_box(bm, (lx, 0, 2.82), (0.22, 0.22, 0.34), T, uv=False, mi=2)               # стекло (светится)
-    _, t = finish("lamp_post_a", bm, [M["wood"], M["iron"], M["glass"]])
-    return {"lamp_post_a": t, "light_at_blender": (3.5 + lx, -10.0, 2.82)}
+    T = Matrix.Translation((*LAMP_POS, 0))
+    add_box(bm, (0, 0, 0.17), (0.4, 0.4, 0.34), T, tile=1.0, mi=5)                                    # основание (камень)
+    add_box(bm, (0, 0, 1.77), (0.22, 0.22, 3.06), T, tile=1.0)                                        # столб
+    _pyramid(bm, T @ Matrix.Translation((0, 0, 3.38)), 0.2, 0.02, 0.16, 0)                            # навершие
+    add_box(bm, (-0.52, 0, 3.05), (1.2, 0.14, 0.14), T, tile=1.0)                                     # кронштейн к тропе
+    a, b = Vector((-0.11, 0, 2.42)), Vector((-0.66, 0, 2.99))                                         # подкос
+    d = b - a
+    Mb = T @ Matrix.Translation((a + b) / 2) @ d.to_track_quat("X", "Z").to_matrix().to_4x4()
+    add_box(bm, (0, 0, 0), (d.length + 0.08, 0.1, 0.1), Mb, tile=1.0)
+    add_box(bm, (-0.126, 0, 2.98), (0.03, 0.26, 0.34), T, tile=0.5, mi=1)                             # железная накладка
+    for oy in (-0.08, 0.08):
+        for oz in (-0.11, 0.11):
+            add_box(bm, (-0.147, oy, 2.98 + oz), (0.02, 0.04, 0.04), T, tile=0.5, mi=1)               # болты
+    hook = T @ Matrix.Translation((-1.02, 0, 2.95))
+    add_torus(bm, hook, 0.03, 0.007, seg=10, ring=4, mi=1)                                             # крюк
+    drop = _chain(bm, hook @ Matrix.Translation((0, 0, -0.03)), 3)
+    top = T @ Vector((-1.02, 0, 2.92 - drop))
+    _lantern(bm, top, s=1.0, mi_iron=1, mi_glass=2, mi_flame=3, mi_candle=4)
+    _, t = finish("lamp_post_a", bm, [M["wood"], M["iron"], M["glass"], M["flame"], M["candle"], M["stone"]])
+    return {"lamp_post_a": t, "lantern_center": tuple(round(v, 3) for v in (top + Vector((0, 0, -0.41))))}
 
 
-LANTERN_POS = (2.5, -10.0, 2.82)       # Blender; в glTF = (2.5, 2.82, 10)
+LANTERN_POS = (2.48, -10.0, 2.345)     # центр стекла фонаря на столбе (Blender); в glTF = (2.48, 2.345, 10)
 LANTERN_COLOR = (1.0, 0.55, 0.22)       # тёплый свет свечи/масляной лампы
 LANTERN_POWER = 65.0                    # в экспорте RAW это число = PointLight.intensity в three.js (без пересчёта в канделы)
 
@@ -616,7 +725,7 @@ def build_bench(M=None):
     M = M or mats()
     clear("bench_")
     bm = bmesh.new()
-    T = Matrix.Translation((-4.5, -6.0, 0)) @ Matrix.Rotation(math.radians(12), 4, "Z")
+    T = Matrix.Translation((*BENCH_T[0], 0)) @ Matrix.Rotation(math.radians(BENCH_T[1]), 4, "Z")
     for dy in (-0.16, 0.0, 0.16):
         add_box(bm, (0, dy, 0.46), (1.7, 0.14, 0.045), T, tile=1.0, off=(dy, 0))
     for dz in (0.76, 0.94):
@@ -634,6 +743,24 @@ GRASS_KINDS = {                      # (низ, кончик) — линейны
     "light": ((0.014, 0.045, 0.010), (0.100, 0.240, 0.040)),
     "dry": ((0.030, 0.025, 0.010), (0.160, 0.120, 0.040)),
 }
+
+
+def _tuft(bm, lay, rnd, x, y, kind, scale):
+    """Пучок из 5-9 травинок-треугольников вокруг (x, y); цвет вершин — от низа к кончику (GRASS_KINDS)."""
+    low, tip = GRASS_KINDS[kind]
+    for _ in range(rnd.randint(5, 9)):
+        a = rnd.uniform(0, 6.28)
+        ox, oy = x + math.cos(a) * rnd.uniform(0, 0.09), y + math.sin(a) * rnd.uniform(0, 0.09)
+        h, w = rnd.uniform(0.16, 0.34) * scale, rnd.uniform(0.032, 0.055)
+        bend = rnd.uniform(0.04, 0.13) * scale
+        d = Vector((math.cos(a), math.sin(a), 0))
+        side = Vector((-d.y, d.x, 0)) * w
+        p2 = Vector((ox, oy, 0)) + d * bend
+        p2.z = h
+        f = bm.faces.new([bm.verts.new(Vector((ox, oy, 0)) - side), bm.verts.new(Vector((ox, oy, 0)) + side), bm.verts.new(p2)])
+        jitter = rnd.uniform(0.85, 1.15)
+        for lp, c in zip(f.loops, (low, low, tip)):
+            lp[lay] = (c[0] * jitter, c[1] * jitter, c[2] * jitter, 1.0)
 
 
 def build_grass(M=None, tufts=560, seed=17):
@@ -661,26 +788,34 @@ def build_grass(M=None, tufts=560, seed=17):
         bm = bms[q]
         lay = bm.loops.layers.float_color.get("Color") or bm.loops.layers.float_color.new("Color")
         scale = rnd.uniform(0.7, 1.3) * (1.9 if tall else 1.0)
-        low, tip = GRASS_KINDS[kind]
-        for _ in range(rnd.randint(5, 9)):
-            a = rnd.uniform(0, 6.28)
-            ox, oy = x + math.cos(a) * rnd.uniform(0, 0.09), y + math.sin(a) * rnd.uniform(0, 0.09)
-            h, w = rnd.uniform(0.16, 0.34) * scale, rnd.uniform(0.032, 0.055)
-            bend = rnd.uniform(0.04, 0.13) * scale
-            d = Vector((math.cos(a), math.sin(a), 0))
-            side = Vector((-d.y, d.x, 0)) * w
-            p2 = Vector((ox, oy, 0)) + d * bend
-            p2.z = h
-            f = bm.faces.new([bm.verts.new(Vector((ox, oy, 0)) - side), bm.verts.new(Vector((ox, oy, 0)) + side), bm.verts.new(p2)])
-            jitter = rnd.uniform(0.85, 1.15)
-            for lp, c in zip(f.loops, (low, low, tip)):
-                lp[lay] = (c[0] * jitter, c[1] * jitter, c[2] * jitter, 1.0)
+        _tuft(bm, lay, rnd, x, y, kind, scale)
         placed += 1
     stats = {}
     for q, bm in bms.items():
         _, t = finish(f"grass_tufts_0{q + 1}", bm, [M["blades"]])
         stats[f"grass_tufts_0{q + 1}"] = t
     return stats
+
+
+FLOWER_PALETTE = [(0.60, 0.58, 0.45), (0.70, 0.66, 0.50), (0.38, 0.26, 0.55), (0.62, 0.50, 0.08), (0.55, 0.55, 0.60)]
+
+
+def _flower(bm, lay, rnd, x, y, petal):
+    """Цветок: стебель-треугольник и пятилепестковая звёздочка с жёлтой серединкой (цвета вершин)."""
+    h = rnd.uniform(0.22, 0.42)
+    lean = Vector((rnd.uniform(-0.05, 0.05), rnd.uniform(-0.05, 0.05), 0))
+    base, top = Vector((x, y, 0)), Vector((x, y, h)) + lean
+    w = 0.006
+    stem = bm.faces.new([bm.verts.new(base - Vector((w, 0, 0))), bm.verts.new(base + Vector((w, 0, 0))), bm.verts.new(top)])
+    for lp, c in zip(stem.loops, ((0.010, 0.040, 0.008), (0.010, 0.040, 0.008), (0.03, 0.10, 0.02))):
+        lp[lay] = (*c, 1.0)
+    center = bm.verts.new(top + Vector((0, 0, 0.012)))
+    ring = [bm.verts.new(top + Vector((math.cos(k * math.tau / 5), math.sin(k * math.tau / 5), 0)) * Vector((0.034, 0.034, 1)))
+            for k in range(5)]
+    for k in range(5):
+        f = bm.faces.new((center, ring[k], ring[(k + 1) % 5]))
+        for lp in f.loops:
+            lp[lay] = (0.62, 0.48, 0.05, 1.0) if lp.vert == center else (*petal, 1.0)
 
 
 def build_flowers(M=None, clusters=9):
@@ -691,7 +826,7 @@ def build_flowers(M=None, clusters=9):
     gs = graves()
     bm = bmesh.new()
     lay = bm.loops.layers.float_color.new("Color")
-    palette = [(0.60, 0.58, 0.45), (0.70, 0.66, 0.50), (0.38, 0.26, 0.55), (0.62, 0.50, 0.08), (0.55, 0.55, 0.60)]
+    palette = FLOWER_PALETTE
     count = tries = 0
     while count < clusters * 18 and tries < 5000:
         tries += 1
@@ -701,23 +836,28 @@ def build_flowers(M=None, clusters=9):
         x, y = cx + rnd.gauss(0, 0.9), cy + rnd.gauss(0, 0.9)
         if blocked(x, y, grave_r=1.0, path_margin=0.4, gs=gs):
             continue
-        h = rnd.uniform(0.22, 0.42)
-        lean = Vector((rnd.uniform(-0.05, 0.05), rnd.uniform(-0.05, 0.05), 0))
-        base, top = Vector((x, y, 0)), Vector((x, y, h)) + lean
-        w = 0.006
-        stem = bm.faces.new([bm.verts.new(base - Vector((w, 0, 0))), bm.verts.new(base + Vector((w, 0, 0))), bm.verts.new(top)])
-        for lp, c in zip(stem.loops, ((0.010, 0.040, 0.008), (0.010, 0.040, 0.008), (0.03, 0.10, 0.02))):
-            lp[lay] = (*c, 1.0)
-        center = bm.verts.new(top + Vector((0, 0, 0.012)))
-        ring = [bm.verts.new(top + Vector((math.cos(k * math.tau / 5), math.sin(k * math.tau / 5), 0)) * Vector((0.034, 0.034, 1)))
-                for k in range(5)]
-        for k in range(5):
-            f = bm.faces.new((center, ring[k], ring[(k + 1) % 5]))
-            for lp in f.loops:
-                lp[lay] = (0.62, 0.48, 0.05, 1.0) if lp.vert == center else (*petal, 1.0)
+        _flower(bm, lay, rnd, x, y, petal)
         count += 1
     _, t = finish("flowers_a", bm, [M["blades"]])
     return {"flowers_a": t, "count": count}
+
+
+def _rock(bm, lay, rnd, x, y, r, subdiv):
+    """Валун радиуса r (сплюснутая икосфера с шумом), мох на верхних гранях — цветом вершин."""
+    mat = (Matrix.Translation((x, y, r * 0.15)) @ Matrix.Rotation(rnd.uniform(0, 6.28), 4, "Z")
+           @ Matrix.Diagonal((r, r * rnd.uniform(0.7, 1.0), r * rnd.uniform(0.55, 0.75), 1)))
+    res = bmesh.ops.create_icosphere(bm, subdivisions=subdiv, radius=1.0, matrix=mat)
+    for v in res["verts"]:
+        v.co += Vector((rnd.uniform(-1, 1), rnd.uniform(-1, 1), rnd.uniform(-1, 1))) * r * 0.16
+    faces = _faces_of(res["verts"])
+    box_uv(faces, bm, tile=1.0, off=(rnd.random(), rnd.random()))
+    amount = rnd.uniform(0.6, 1.0)
+    for f in faces:
+        f.normal_update()
+        t = min(1.0, max(0.0, (f.normal.z - 0.35) / 0.35)) * amount
+        c = (0.86 + (0.50 - 0.86) * t, 0.86 + (0.78 - 0.86) * t, 0.86 + (0.40 - 0.86) * t)
+        for lp in f.loops:
+            lp[lay] = (*c, 1.0)
 
 
 def build_rocks(M=None):
@@ -737,20 +877,7 @@ def build_rocks(M=None):
             if blocked(x, y, grave_r=1.1, path_margin=0.6, gs=gs) and max(abs(x), abs(y)) < 18.3:
                 continue
             r = rnd.uniform(0.55, 0.95) if k == 0 else rnd.uniform(0.14, 0.34)
-            mat = (Matrix.Translation((x, y, r * 0.15)) @ Matrix.Rotation(rnd.uniform(0, 6.28), 4, "Z")
-                   @ Matrix.Diagonal((r, r * rnd.uniform(0.7, 1.0), r * rnd.uniform(0.55, 0.75), 1)))
-            res = bmesh.ops.create_icosphere(bm, subdivisions=2 if k == 0 else 1, radius=1.0, matrix=mat)
-            for v in res["verts"]:
-                v.co += Vector((rnd.uniform(-1, 1), rnd.uniform(-1, 1), rnd.uniform(-1, 1))) * r * 0.16
-            faces = _faces_of(res["verts"])
-            box_uv(faces, bm, tile=1.0, off=(rnd.random(), rnd.random()))
-            amount = rnd.uniform(0.6, 1.0)
-            for f in faces:
-                f.normal_update()
-                t = min(1.0, max(0.0, (f.normal.z - 0.35) / 0.35)) * amount
-                c = (0.86 + (0.50 - 0.86) * t, 0.86 + (0.78 - 0.86) * t, 0.86 + (0.40 - 0.86) * t)
-                for lp in f.loops:
-                    lp[lay] = (*c, 1.0)
+            _rock(bm, lay, rnd, x, y, r, 2 if k == 0 else 1)
             n += 1
     _, t = finish("rocks_a", bm, [M["stone_vc"]])
     return {"rocks_a": t, "count": n}
@@ -917,19 +1044,17 @@ def build_house_details(M=None):
     add_box(bm, (cx, y0 - 0.1 - 0.525, 0.1), (1.6, 0.35, 0.2), tile=1.0)
     _, stats["house_porch_a"] = finish("house_porch_a", bm, [M["stone_wall"]])
 
-    bm = bmesh.new()                                                     # фонарь у двери
-    lx, ly, lz = cx - 0.95, y0 - 0.32, 2.2
-    add_box(bm, (lx, y0 - 0.17, lz + 0.32), (0.04, 0.34, 0.04), tile=1.0)                  # кронштейн
-    add_box(bm, (lx, ly, lz + 0.22), (0.015, 0.015, 0.16), tile=1.0)                       # подвес
-    add_box(bm, (lx, ly, lz - 0.14), (0.2, 0.2, 0.03), tile=1.0)                           # дно
-    for sx in (-0.085, 0.085):
-        for sy in (-0.085, 0.085):
-            add_box(bm, (lx + sx, ly + sy, lz), (0.022, 0.022, 0.28), tile=1.0)
-    res = bmesh.ops.create_cone(bm, cap_ends=True, segments=4, radius1=0.17, radius2=0.02, depth=0.13,
-                                matrix=Matrix.Translation((lx, ly, lz + 0.2)) @ Matrix.Rotation(math.pi / 4, 4, "Z"))
-    box_uv(_faces_of(res["verts"]), bm, 1.0)
-    add_box(bm, (lx, ly, lz), (0.15, 0.15, 0.25), uv=False, mi=1)                          # стекло
-    _, stats["house_lantern_a"] = finish("house_lantern_a", bm, [M["iron"], M["glass"]])
+    bm = bmesh.new()                                                     # фонарь у двери (как на столбе, меньше)
+    lx = cx - 0.95
+    add_box(bm, (lx, y0 - 0.025, 2.62), (0.16, 0.03, 0.22), tile=0.5)                     # накладка на стене
+    add_box(bm, (lx, y0 - 0.22, 2.68), (0.035, 0.42, 0.035), tile=0.5)                   # кронштейн
+    pa, pb = Vector((lx, y0 - 0.03, 2.45)), Vector((lx, y0 - 0.26, 2.66))                 # подкос
+    dv = pb - pa
+    add_box(bm, (0, 0, 0), (dv.length + 0.04, 0.025, 0.025),
+            Matrix.Translation((pa + pb) / 2) @ dv.to_track_quat("X", "Z").to_matrix().to_4x4(), tile=0.5)
+    add_torus(bm, Matrix.Translation((lx, y0 - 0.40, 2.66)), 0.022, 0.005, seg=8, ring=4, mi=0)   # крюк
+    _lantern(bm, Vector((lx, y0 - 0.40, 2.64)), s=0.72, mi_iron=0, mi_glass=1, mi_flame=2, mi_candle=3)
+    _, stats["house_lantern_a"] = finish("house_lantern_a", bm, [M["iron"], M["glass"], M["flame"], M["candle"]])
 
     bm = bmesh.new()                                                     # брусчатка перед крыльцом
     x0, x1, py0, py1 = PATCH
@@ -953,7 +1078,7 @@ def build_house_lights():
     clear("house_light_")
     h = HOUSE
     out = {}
-    for name, pos, power, color in (("house_light_lantern", (h["cx"] - 0.95, h["y0"] - 0.32, 2.2), 30.0, LANTERN_COLOR),
+    for name, pos, power, color in (("house_light_lantern", (h["cx"] - 0.95, h["y0"] - 0.40, 2.345), 30.0, LANTERN_COLOR),
                                     ("house_light_window", (h["cx"] + 1.6, h["y0"] - 0.7, 1.9), 10.0, (1.0, 0.6, 0.28))):
         data = bpy.data.lights.get(name) or bpy.data.lights.new(name, "POINT")
         data.color, data.energy, data.shadow_soft_size = color, power, 0.1
@@ -991,29 +1116,60 @@ def build_crates(M=None):
     return {"crates_a": t}
 
 
+BARREL_PROFILE = [(0.0, 0.0), (0.26, 0.0), (0.30, 0.2), (0.315, 0.43), (0.30, 0.66), (0.26, 0.86), (0.0, 0.86)]
+
+
+def _barrel(bm, x, y, lying=False, rot=0.0):
+    """Бочка: клёпки (доски вдоль высоты, слот 0) и три железных обруча (слот 1); lying — на боку."""
+    before = set(bm.faces)
+    faces = lathe(bm, BARREL_PROFILE, 14, (0, 0, 0))
+    for f in faces:
+        f.material_index = 0
+    cyl_uv2(faces, bm, 0, 0, tile=1.0, swap=True, r_ref=0.3)
+    for zb, rb in ((0.12, 0.292), (0.43, 0.322), (0.74, 0.292)):
+        add_cone(bm, (0, 0, zb), rb, rb, 0.05, seg=14, mi=1, tile=1.0)
+    part = new_faces(bm, before)
+    verts = list({v for f in part for v in f.verts})
+    Mt = Matrix.Translation((x, y, 0.315 if lying else 0)) @ Matrix.Rotation(math.radians(rot), 4, "Z")
+    if lying:
+        Mt = Mt @ Matrix.Rotation(math.pi / 2, 4, "X") @ Matrix.Translation((0, 0, -0.43))
+    bmesh.ops.transform(bm, matrix=Mt, verts=verts)
+
+
 def build_barrels(M=None):
     """Бочки у восточной стены: клёпки (доски вдоль высоты), железные обручи, одна лежит на боку."""
     M = M or mats()
     clear("barrels_")
     bm = bmesh.new()
-    prof = [(0.0, 0.0), (0.26, 0.0), (0.30, 0.2), (0.315, 0.43), (0.30, 0.66), (0.26, 0.86), (0.0, 0.86)]
     for x, y, lying, rot in BARRELS:
-        before = set(bm.faces)
-        faces = lathe(bm, prof, 14, (0, 0, 0))
-        for f in faces:
-            f.material_index = 0
-        cyl_uv2(faces, bm, 0, 0, tile=1.0, swap=True, r_ref=0.3)
-        for zb, rb in ((0.12, 0.292), (0.43, 0.322), (0.74, 0.292)):
-            for f in add_cone(bm, (0, 0, zb), rb, rb, 0.05, seg=14, mi=1, tile=1.0):
-                pass
-        part = new_faces(bm, before)
-        verts = list({v for f in part for v in f.verts})
-        Mt = Matrix.Translation((x, y, 0.315 if lying else 0)) @ Matrix.Rotation(math.radians(rot), 4, "Z")
-        if lying:
-            Mt = Mt @ Matrix.Rotation(math.pi / 2, 4, "X") @ Matrix.Translation((0, 0, -0.43))
-        bmesh.ops.transform(bm, matrix=Mt, verts=verts)
+        _barrel(bm, x, y, lying, rot)
     _, t = finish("barrels_a", bm, [M["planks"], M["iron"]])
     return {"barrels_a": t}
+
+
+POT_PROFILE = [(0.0, 0.0), (0.09, 0.0), (0.13, 0.07), (0.16, 0.19), (0.145, 0.31), (0.085, 0.39), (0.07, 0.45),
+               (0.09, 0.49), (0.075, 0.5), (0.0, 0.47)]
+
+
+def _pot(bm, x, y, s=1.0, a0=0.0, tilt=0.0):
+    """Глиняный горшок масштаба s с двумя ручками дугой (a0 — их направление); tilt — наклон, °."""
+    before = set(bm.faces)
+    faces = lathe(bm, [(r * s, z * s) for r, z in POT_PROFILE], 12, (x, y, 0))
+    cyl_uv2(faces, bm, x, y, tile=0.6, r_ref=0.15 * s)
+    for side in (0, math.pi):
+        a = a0 + side
+        d = Vector((math.cos(a), math.sin(a), 0))
+        pts = [Vector((x, y, 0)) + d * (0.075 * s) + Vector((0, 0, 0.43 * s)),
+               Vector((x, y, 0)) + d * (0.16 * s) + Vector((0, 0, 0.41 * s)),
+               Vector((x, y, 0)) + d * (0.15 * s) + Vector((0, 0, 0.29 * s))]
+        for p0, p1 in zip(pts, pts[1:]):
+            v = p1 - p0
+            Mh = Matrix.Translation((p0 + p1) / 2) @ v.to_track_quat("Z", "Y").to_matrix().to_4x4()
+            add_cone(bm, (0, 0, 0), 0.016 * s, 0.016 * s, v.length + 0.01, seg=5, M=Mh, tile=0.6)
+    if tilt:
+        part = new_faces(bm, before)
+        bmesh.ops.rotate(bm, cent=(x, y, 0), matrix=Matrix.Rotation(math.radians(tilt), 3, "X"),
+                         verts=list({v for f in part for v in f.verts}))
 
 
 def build_pots(M=None):
@@ -1032,28 +1188,11 @@ def build_pots(M=None):
             continue
         spots.append((px, py))
     bm = bmesh.new()
-    prof = [(0.0, 0.0), (0.09, 0.0), (0.13, 0.07), (0.16, 0.19), (0.145, 0.31), (0.085, 0.39), (0.07, 0.45),
-            (0.09, 0.49), (0.075, 0.5), (0.0, 0.47)]
     for k, (x, y) in enumerate(spots):
         s = rnd.uniform(0.75, 1.15)
-        before = set(bm.faces)
-        faces = lathe(bm, [(r * s, z * s) for r, z in prof], 12, (x, y, 0))
-        cyl_uv2(faces, bm, x, y, tile=0.6, r_ref=0.15 * s)
         a0 = rnd.uniform(0, math.tau)
-        for side in (0, math.pi):                                       # две ручки дугой
-            a = a0 + side
-            d = Vector((math.cos(a), math.sin(a), 0))
-            pts = [Vector((x, y, 0)) + d * (0.075 * s) + Vector((0, 0, 0.43 * s)),
-                   Vector((x, y, 0)) + d * (0.16 * s) + Vector((0, 0, 0.41 * s)),
-                   Vector((x, y, 0)) + d * (0.15 * s) + Vector((0, 0, 0.29 * s))]
-            for p0, p1 in zip(pts, pts[1:]):
-                v = p1 - p0
-                Mh = Matrix.Translation((p0 + p1) / 2) @ v.to_track_quat("Z", "Y").to_matrix().to_4x4()
-                add_cone(bm, (0, 0, 0), 0.016 * s, 0.016 * s, v.length + 0.01, seg=5, M=Mh, tile=0.6)
-        if k % 3 == 2:                                                  # часть горшков слегка наклонена
-            part = new_faces(bm, before)
-            bmesh.ops.rotate(bm, cent=(x, y, 0), matrix=Matrix.Rotation(math.radians(rnd.uniform(6, 14)), 3, "X"),
-                             verts=list({v for f in part for v in f.verts}))
+        tilt = rnd.uniform(6, 14) if k % 3 == 2 else 0.0                # часть горшков слегка наклонена
+        _pot(bm, x, y, s, a0, tilt)
     _, t = finish("pots_a", bm, [M["clay"]], smooth=False)
     return {"pots_a": t, "count": len(spots)}
 
