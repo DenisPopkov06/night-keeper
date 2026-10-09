@@ -20,8 +20,6 @@ import bmesh
 import bpy
 from mathutils import Euler, Matrix, Vector
 
-import tree_lib
-
 HERE = os.environ.get("NK_ASSETS", r"D:\dev\denisovLoh\assets_src\blender")
 REPO = os.path.abspath(os.path.join(HERE, "..", ".."))
 TEX = os.path.join(REPO, "assets_src", "textures_src")
@@ -115,10 +113,10 @@ def flat_material(name, rgb=(1, 1, 1), rough=0.8, metal=0.0, emission=None, cull
     return m
 
 
-def backdrop_material(name, culling=True):
-    """Матовый материал на цветах вершин для рельефа, леса и крон: roughness 1 и без бликов (specular 0) —
-    иначе скользящий свет луны даёт на земле «снежный» глянец (эффект Френеля). culling=False — двусторонний (листья)."""
-    m = flat_material(name, rough=1.0, vcolor=True, culling=culling)
+def backdrop_material(name):
+    """Матовый материал на цветах вершин для рельефа и леса за оградой: roughness 1 и без бликов (specular 0) —
+    иначе скользящий свет луны даёт на земле «снежный» глянец (эффект Френеля)."""
+    m = flat_material(name, rough=1.0, vcolor=True)
     bsdf = next(n for n in m.node_tree.nodes if n.type == "BSDF_PRINCIPLED")
     bsdf.inputs["Specular IOR Level"].default_value = 0.0
     return m
@@ -177,7 +175,6 @@ def mats(force=False):
         "flame": ("mat_candle_flame", lambda n: unlit_material(n, (1.0, 0.86, 0.5))),
         "candle": ("mat_candle_wax", lambda n: unlit_material(n, (0.85, 0.66, 0.42))),
         "backdrop": ("mat_backdrop", backdrop_material),
-        "crown": ("mat_crown", lambda n: backdrop_material(n, culling=False)),   # листва дуба: двусторонние осколки
     }
     return {k: (None if force else bpy.data.materials.get(n)) or mk(n) for k, (n, mk) in spec.items()}
 
@@ -545,22 +542,67 @@ def build_gate(M=None):
     return stats
 
 
+def _oak_crown(bm, rnd, tips, top, size):
+    """Крона дуба из гранёных комьев с текстурой листвы. Ком стоит на конце каждой ветки (конец ветки внутри кома), ещё один —
+    над стволом и один сверху: листва нигде не висит отдельно от дерева. tips/top — точки в мировых координатах."""
+    lay = bm.loops.layers.float_color.get("Color") or bm.loops.layers.float_color.new("Color")
+    blobs = [(t + Vector((0, 0, 0.35 * size)), size * rnd.uniform(0.9, 1.2)) for t in tips]
+    blobs += [(top, size * 1.5), (top + Vector((rnd.uniform(-0.5, 0.5), rnd.uniform(-0.5, 0.5), 1.25 * size)), size * 1.2)]
+    z_lo, z_hi = min(c.z for c, _ in blobs), max(c.z for c, _ in blobs)
+    for c, sz in blobs:
+        mat = (Matrix.Translation(c) @ Matrix.Rotation(rnd.uniform(0, 6.28), 4, "Z")
+               @ Matrix.Diagonal((sz, sz * rnd.uniform(0.85, 1.1), sz * rnd.uniform(0.75, 0.95), 1)))
+        res = bmesh.ops.create_icosphere(bm, subdivisions=2, radius=1.0, matrix=mat)
+        for vv in res["verts"]:
+            vv.co += Vector((rnd.uniform(-1, 1), rnd.uniform(-1, 1), rnd.uniform(-1, 1))) * 0.10 * sz
+        faces = _faces_of(res["verts"])
+        box_uv(faces, bm, tile=0.9, off=(rnd.random(), rnd.random()))
+        hz = min(1.0, max(0.0, (c.z - z_lo) / max(z_hi - z_lo, 1e-6)))
+        base = 0.58 + 0.42 * hz
+        tint = (base * rnd.uniform(0.88, 1.0), base, base * rnd.uniform(0.85, 1.0))
+        for f in faces:
+            f.material_index = 1
+            j = rnd.uniform(0.9, 1.0)
+            for lp in f.loops:
+                lp[lay] = (tint[0] * j, tint[1] * j, tint[2] * j, 1.0)
+
+
+def _oak(bm, rnd, cx, cy, s):
+    """Дуб: ствол с расширением (уходит в землю на 0.25 м), пять сучьев по два ответвления; крона — _oak_crown на концах веток."""
+    T = Matrix.Translation((cx, cy, 0)) @ Matrix.Diagonal((s, s, s, 1))
+    add_cone(bm, (0, 0, 1.8), 0.42, 0.24, 3.6, seg=9, M=T, tile=1.0, cyl=(cx, cy), rz=rnd.uniform(0, 1))
+    add_cone(bm, (0, 0, 0.10), 0.72, 0.40, 0.70, seg=9, M=T, tile=1.0, cyl=(cx, cy))
+    tips = []
+    az0 = rnd.uniform(0, 72)
+    for k in range(5):
+        az, tilt, ln, z0 = az0 + k * 72 + rnd.uniform(-14, 14), rnd.uniform(32, 54), rnd.uniform(2.3, 3.0), rnd.uniform(2.6, 3.3)
+        B = Matrix.Translation((0, 0, z0)) @ Matrix.Rotation(math.radians(az), 4, "Z") @ Matrix.Rotation(math.radians(tilt), 4, "Y")
+        add_cone(bm, (0, 0, ln / 2), 0.17, 0.07, ln, seg=6, M=T @ B, tile=1.0)
+        tips.append(T @ (B @ Vector((0, 0, ln))))
+        for sgn in (-1, 1):
+            Bs = (B @ Matrix.Translation((0, 0, ln * 0.55)) @ Matrix.Rotation(math.radians(sgn * rnd.uniform(28, 42)), 4, "Z")
+                  @ Matrix.Rotation(math.radians(rnd.uniform(20, 34)), 4, "Y"))
+            sl = rnd.uniform(1.2, 1.7)
+            add_cone(bm, (0, 0, sl / 2), 0.09, 0.03, sl, seg=5, M=T @ Bs, tile=1.0)
+            tips.append(T @ (Bs @ Vector((0, 0, sl))))
+    _oak_crown(bm, rnd, tips, T @ Vector((0, 0, 4.9)), 1.15 * s)
+
+
 TREES = (("tree_oak_a", (-11.0, 8.0), 1.0, 41), ("tree_oak_b", (12.0, -7.0), 0.85, 42),
          ("tree_leafy_c", (7.4, 17.3), 0.7, 44))                      # имя, (x, y), масштаб, seed
 DEAD_TREE = (13.0, 13.0)
 
 
 def build_trees(M=None):
-    """Дубы с густой кроной из гранёных листовых осколков (tree_lib.oak) и сухое дерево. Ствол с расширением и сучьями, кора."""
+    """Дубы с кроной из комьев с текстурой листвы (каждый ком — на конце ветки) и сухое дерево. Ствол с расширением и сучьями, кора."""
     M = M or mats()
     clear("tree_")
     stats = {}
     for name, (cx, cy), scale, seed in TREES:
         rnd = random.Random(seed)
         bm = bmesh.new()
-        lay = bm.loops.layers.float_color.new("Color")
-        tree_lib.oak(bm, lay, rnd, cx, cy, scale, add_cone)
-        _, stats[name] = finish(name, bm, [M["bark"], M["crown"]])
+        _oak(bm, rnd, cx, cy, scale)
+        _, stats[name] = finish(name, bm, [M["bark"], M["leaves"]])
     rnd = random.Random(43)                                                # сухое дерево
     bm = bmesh.new()
     cx, cy = DEAD_TREE
@@ -1351,16 +1393,6 @@ def _leafy(bm, lay, rnd, x, y, z, s, blobs=6):
         _vc_blob(bm, lay, rnd, pos, size, lo, hi, jitter=0.10)
 
 
-def _poplar(bm, lay, rnd, x, y, z, s):
-    """Тополь/кипарис: узкая высокая крона — расширение в средней части и острая верхушка."""
-    j = rnd.uniform(0.8, 1.2)
-    lo, mid, hi = (0.012 * j, 0.030 * j, 0.019 * j), (0.020 * j, 0.048 * j, 0.027 * j), (0.027 * j, 0.064 * j, 0.034 * j)
-    rot = rnd.random() * 6.28
-    _vc_cone(bm, lay, (x, y, z + 1.0 * s), 0.22 * s, 0.12 * s, 2.6 * s, 6, rot, *TRUNK)
-    _vc_cone(bm, lay, (x, y, z + 4.0 * s), 0.85 * s, 1.25 * s, 4.0 * s, 8, rot, lo, mid)
-    _vc_cone(bm, lay, (x, y, z + 8.6 * s), 1.25 * s, 0.0, 5.2 * s, 8, rot, mid, hi)
-
-
 def _bare_tree(bm, lay, rnd, x, y, z, s):
     """Голое дерево: кривой ствол и пять веток-конусов; тёмно-бурое."""
     j = rnd.uniform(0.8, 1.25)
@@ -1386,14 +1418,14 @@ def _pick(rnd, table):
     return table[-1][0]
 
 
-NEAR_KINDS = (("spruce", 26), ("spruce_tall", 14), ("fir", 14), ("leafy", 20), ("poplar", 8), ("sapling", 10), ("bare", 8))
+NEAR_KINDS = (("spruce", 26), ("spruce_tall", 14), ("fir", 14), ("leafy", 22), ("sapling", 10), ("bare", 8))
 FAR_KINDS = (("spruce_tall", 48), ("spruce", 30), ("leafy", 10), ("fir", 12))
 
 
 # (диапазон масштаба, радиус кроны на единицу масштаба — чтобы крона не нависала над полем)
 KIND_SCALE = {"spruce": (0.8, 1.3), "spruce_tall": (1.15, 1.75), "sapling": (0.38, 0.6), "fir": (0.85, 1.4),
-              "leafy": (0.8, 1.45), "poplar": (0.85, 1.4), "bare": (0.9, 1.4)}
-KIND_RADIUS = {"spruce": 1.8, "spruce_tall": 1.6, "sapling": 1.8, "fir": 2.6, "leafy": 4.4, "poplar": 1.2, "bare": 3.2}
+              "leafy": (0.8, 1.45), "bare": (0.9, 1.4)}
+KIND_RADIUS = {"spruce": 1.8, "spruce_tall": 1.6, "sapling": 1.8, "fir": 2.6, "leafy": 4.4, "bare": 3.2}
 FENCE_CLEAR = 20.5            # крона любого дерева за оградой не должна заходить внутрь этого расстояния от центра
 
 
@@ -1408,8 +1440,6 @@ def _plant(bm, lay, rnd, kind, x, y, z, s, far):
         _fir(bm, lay, rnd, x, y, z, s)
     elif kind == "leafy":
         _leafy(bm, lay, rnd, x, y, z, s, 4 if far else 6)
-    elif kind == "poplar":
-        _poplar(bm, lay, rnd, x, y, z, s)
     else:
         _bare_tree(bm, lay, rnd, x, y, z, s)
 
