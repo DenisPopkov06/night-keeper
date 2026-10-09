@@ -3,11 +3,18 @@ export interface HUDTask {
   done: boolean;
 }
 
+export interface HUDDirectionHint {
+  bearingRadians: number;
+  distanceMeters: number;
+}
+
 export interface HUDState {
   flashlightChargePercent: number;
   flashlightOn: boolean;
   remainingSec: number;
   tasks: HUDTask[];
+  interactionPrompt: string | null;
+  nearestTaskDirection: HUDDirectionHint | null;
 }
 
 const LOW_TIME_THRESHOLD_SEC = 30;
@@ -30,12 +37,18 @@ export class HUD {
   private readonly flashlightHint: HTMLElement;
   private readonly timerEl: HTMLElement;
   private readonly taskListEl: HTMLElement;
+  private readonly promptEl: HTMLElement;
+  private readonly compassEl: HTMLElement;
+  private readonly compassArrowEl: HTMLElement;
+  private readonly compassDistanceEl: HTMLElement;
 
   private lastChargePercent = -1;
   private lastTimerText = "";
   private lastTasksSignature = "";
   private lastIsLowTime = false;
   private flashlightUsedOnce = false;
+  private lastPrompt: string | null = "";
+  private lastCompassSignature = "";
 
   constructor(parent: HTMLElement) {
     this.root = document.createElement("div");
@@ -57,7 +70,26 @@ export class HUD {
     this.taskListEl = document.createElement("ul");
     this.taskListEl.className = "hud__tasks";
 
-    this.root.append(flashlight, this.flashlightHint, this.timerEl, this.taskListEl);
+    this.promptEl = document.createElement("div");
+    this.promptEl.className = "hud__prompt";
+
+    this.compassEl = document.createElement("div");
+    this.compassEl.className = "hud__compass";
+    this.compassArrowEl = document.createElement("span");
+    this.compassArrowEl.className = "hud__compass-arrow";
+    this.compassArrowEl.textContent = "▲";
+    this.compassDistanceEl = document.createElement("span");
+    this.compassDistanceEl.className = "hud__compass-distance";
+    this.compassEl.append(this.compassArrowEl, this.compassDistanceEl);
+
+    this.root.append(
+      flashlight,
+      this.flashlightHint,
+      this.timerEl,
+      this.taskListEl,
+      this.promptEl,
+      this.compassEl,
+    );
     parent.appendChild(this.root);
   }
 
@@ -66,6 +98,8 @@ export class HUD {
     this.setFlashlightHint(state.flashlightOn);
     this.setTimeRemaining(state.remainingSec);
     this.setTaskList(state.tasks);
+    this.setInteractionPrompt(state.interactionPrompt);
+    this.setCompass(state.nearestTaskDirection);
   }
 
   private setFlashlightCharge(percent: number): void {
@@ -118,6 +152,28 @@ export class HUD {
       this.lastIsLowTime = isLowTime;
       this.timerEl.classList.toggle("hud__timer--low", isLowTime);
     }
+  }
+
+  private setInteractionPrompt(prompt: string | null): void {
+    if (prompt === this.lastPrompt) return;
+    this.lastPrompt = prompt;
+    this.promptEl.textContent = prompt ?? "";
+    this.promptEl.style.display = prompt ? "" : "none";
+  }
+
+  /** Стрелка поворачивается на угол относительно текущего взгляда игрока (0 = прямо
+   *  по курсу) — это бесплатный общий ориентир блокнота, не точная метка. */
+  private setCompass(hint: HUDDirectionHint | null): void {
+    const signature = hint ? `${hint.bearingRadians.toFixed(2)}:${Math.round(hint.distanceMeters)}` : "";
+    if (signature === this.lastCompassSignature) return;
+    this.lastCompassSignature = signature;
+
+    this.compassEl.style.display = hint ? "" : "none";
+    if (!hint) return;
+
+    const degrees = (hint.bearingRadians * 180) / Math.PI;
+    this.compassArrowEl.style.transform = `rotate(${degrees}deg)`;
+    this.compassDistanceEl.textContent = `~${Math.round(hint.distanceMeters)} м`;
   }
 
   destroy(): void {
