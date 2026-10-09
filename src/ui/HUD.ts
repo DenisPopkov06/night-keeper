@@ -16,6 +16,7 @@ export interface HUDState {
   interactionPrompt: string | null;
   nearestTaskDirection: HUDDirectionHint | null;
   pointerLocked: boolean;
+  staminaPercent: number;
 }
 
 const LOW_TIME_THRESHOLD_SEC = 30;
@@ -43,8 +44,10 @@ export class HUD {
   private readonly compassArrowEl: HTMLElement;
   private readonly compassDistanceEl: HTMLElement;
   private readonly pointerLockHint: HTMLElement;
+  private readonly staminaBar: HTMLElement;
 
   private lastChargePercent = -1;
+  private lastStaminaPercent = -1;
   private lastPointerLocked: boolean | null = null;
   private lastTimerText = "";
   private lastTasksSignature = "";
@@ -91,8 +94,15 @@ export class HUD {
     this.pointerLockHint.className = "hud__hint hud__hint--pointer-lock";
     this.pointerLockHint.textContent = "Клик — захватить курсор для обзора";
 
+    const stamina = document.createElement("div");
+    stamina.className = "hud__stamina";
+    this.staminaBar = document.createElement("div");
+    this.staminaBar.className = "hud__stamina-bar";
+    stamina.appendChild(this.staminaBar);
+
     this.root.append(
       flashlight,
+      stamina,
       this.flashlightHint,
       this.timerEl,
       this.taskListEl,
@@ -111,6 +121,7 @@ export class HUD {
     this.setInteractionPrompt(state.interactionPrompt);
     this.setCompass(state.nearestTaskDirection);
     this.setPointerLockHint(state.pointerLocked);
+    this.setStamina(state.staminaPercent);
   }
 
   private setFlashlightCharge(percent: number): void {
@@ -118,6 +129,13 @@ export class HUD {
     if (rounded === this.lastChargePercent) return;
     this.lastChargePercent = rounded;
     this.flashlightBar.style.width = `${rounded}%`;
+  }
+
+  private setStamina(percent: number): void {
+    const rounded = Math.round(Math.max(0, Math.min(100, percent)));
+    if (rounded === this.lastStaminaPercent) return;
+    this.lastStaminaPercent = rounded;
+    this.staminaBar.style.width = `${rounded}%`;
   }
 
   /** Подсказка клавиши видна, пока игрок ни разу не включил фонарик — он выключен

@@ -6,6 +6,7 @@ import { AssetLoader } from "@/core/AssetLoader";
 import { SceneManager } from "@/core/SceneManager";
 import { PlayerController } from "@/systems/PlayerController";
 import { FlashlightSystem } from "@/systems/FlashlightSystem";
+import { StaminaSystem } from "@/systems/StaminaSystem";
 import { InteractionSystem } from "@/systems/InteractionSystem";
 import { ObjectStateMachine } from "@/systems/ObjectStateMachine";
 import { ShiftManager, type ShiftEndReason } from "@/systems/ShiftManager";
@@ -20,6 +21,8 @@ import { ShiftReportScreen } from "@/ui/ShiftReportScreen";
 import { PauseMenu } from "@/ui/PauseMenu";
 import { createPostProcessing, type PostProcessingPipeline } from "@/render/PostProcessing";
 
+const SPRINT_SPEED_MULTIPLIER = 1.6;
+
 export class Game {
   private readonly renderer: THREE.WebGLRenderer;
   private readonly camera: THREE.PerspectiveCamera;
@@ -31,6 +34,7 @@ export class Game {
 
   private readonly playerController: PlayerController;
   readonly flashlight = new FlashlightSystem();
+  private readonly stamina = new StaminaSystem();
   private readonly interaction: InteractionSystem;
   readonly shiftManager: ShiftManager;
   readonly hintSystem: HintSystem;
@@ -128,9 +132,13 @@ export class Game {
     const interactPressed = this.input.consumeKeyPress("KeyE");
 
     if (!this.pauseMenu.isVisible()) {
+      const wantsSprint = this.input.isKeyDown("ShiftLeft") || this.input.isKeyDown("ShiftRight");
+      this.stamina.update(deltaSec, wantsSprint);
+      const sprintMultiplier = this.stamina.isSprinting() ? SPRINT_SPEED_MULTIPLIER : 1;
+
       this.playerController.update(
         deltaSec,
-        this.interaction.getMoveSpeedMultiplier(),
+        this.interaction.getMoveSpeedMultiplier() * sprintMultiplier,
         this.sceneManager.getCollisionCircles(),
         this.sceneManager.getStaticCollisionMeshes(),
       );
@@ -149,6 +157,7 @@ export class Game {
     this.hud.update({
       flashlightChargePercent: this.flashlight.getChargePercent(),
       flashlightOn: this.flashlight.isOn(),
+      staminaPercent: this.stamina.getStaminaPercent(),
       remainingSec: this.clock.getShiftRemainingSec(),
       tasks: this.buildHudTasks(),
       interactionPrompt: this.interaction.getInteractionPrompt(),
