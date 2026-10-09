@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import type { ZoneLayout } from "@/data/types";
+import { ObjectState, type ZoneLayout } from "@/data/types";
 import { Clock } from "@/core/Clock";
 import { InputManager } from "@/core/InputManager";
 import { AssetLoader } from "@/core/AssetLoader";
@@ -64,7 +64,12 @@ export class Game {
 
     this.playerController = new PlayerController(this.camera, this.input);
     this.shiftManager = new ShiftManager(this.stateMachine, (reason) => this.onShiftEnd(reason));
-    this.interaction = new InteractionSystem(this.camera, this.stateMachine, this.shiftManager);
+    this.interaction = new InteractionSystem(
+      this.camera,
+      this.stateMachine,
+      this.shiftManager,
+      this.sceneManager,
+    );
     this.hintSystem = new HintSystem(this.sceneManager.scene);
     this.flashlight.attachToCamera(this.camera);
 
@@ -118,7 +123,7 @@ export class Game {
     const interactPressed = this.input.consumeKeyPress("KeyE");
 
     if (!this.pauseMenu.isVisible()) {
-      this.playerController.update(deltaSec);
+      this.playerController.update(deltaSec, this.interaction.getMoveSpeedMultiplier());
       this.flashlight.update(deltaSec);
       this.hintSystem.update(deltaSec);
 
@@ -170,6 +175,15 @@ export class Game {
 
     const config = getShiftConfig(this.currentShiftIndex, layout.zoneId, layout.objects);
     this.shiftManager.startShift(config);
+
+    // ShiftManager уже перевёл объекты в MISSING в ObjectStateMachine — здесь только
+    // физически "роняем" соответствующий инстанс в точку spawnPosition (в траву рядом).
+    for (const task of config.tasks) {
+      if (task.state === ObjectState.MISSING && task.spawnPosition) {
+        this.sceneManager.relocateInstance(task.instanceId, task.spawnPosition);
+      }
+    }
+
     this.clock.startShiftTimer(config.timeLimitSec);
     this.clock.resume();
     trackEvent({ name: "shift_start", shiftIndex: this.currentShiftIndex });
@@ -180,6 +194,7 @@ export class Game {
 
   private onShiftEnd(reason: ShiftEndReason): void {
     this.clock.pause();
+    this.interaction.forceDropCarried();
 
     const config = this.shiftManager.getCurrentConfig();
     const shiftIndex = config?.shiftIndex ?? 0;
