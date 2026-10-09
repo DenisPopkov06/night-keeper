@@ -1,15 +1,10 @@
-import { ObjectState, type PlacedObject, type ShiftConfig, type ShiftTask } from "@/data/types";
-
-const REPAIRABLE_STATES = [
-  ObjectState.DISPLACED,
-  ObjectState.FALLEN,
-  ObjectState.MISSING,
-  ObjectState.BROKEN,
-  ObjectState.ANOMALY,
-];
+import { type PlacedObject, type ShiftConfig, type ShiftTask, ObjectState } from "@/data/types";
+import { OBJECTS_CATALOG } from "@/data/objects.catalog";
 
 const MIN_TIME_LIMIT_SEC = 120;
 const MIN_FLASHLIGHT_CHARGE = 40;
+const MISSING_SEARCH_RADIUS = 3;
+const MISSING_MIN_DISTANCE = 1;
 
 function pickRandom<T>(items: readonly T[], count: number): T[] {
   const shuffled = [...items];
@@ -20,10 +15,34 @@ function pickRandom<T>(items: readonly T[], count: number): T[] {
   return shuffled.slice(0, count);
 }
 
+/** Точка в траве неподалёку от надгробия/вазы, куда "закатился" пропавший предмет. */
+function randomNearbyPosition(anchor: PlacedObject["position"]): PlacedObject["position"] {
+  const angle = Math.random() * Math.PI * 2;
+  const distance = MISSING_MIN_DISTANCE + Math.random() * (MISSING_SEARCH_RADIUS - MISSING_MIN_DISTANCE);
+  return {
+    x: anchor.x + Math.cos(angle) * distance,
+    y: anchor.y,
+    z: anchor.z + Math.sin(angle) * distance,
+  };
+}
+
+function buildTask(placed: PlacedObject): ShiftTask | null {
+  const repairableStates = OBJECTS_CATALOG[placed.objectId]?.repairableStates ?? [];
+  if (repairableStates.length === 0) return null;
+
+  const state = repairableStates[Math.floor(Math.random() * repairableStates.length)];
+  const task: ShiftTask = { instanceId: placed.instanceId, state };
+  if (state === ObjectState.MISSING) task.spawnPosition = randomNearbyPosition(placed.position);
+  return task;
+}
+
 /**
  * shiftIndex -> ShiftConfig. Время и заряд фонарика падают по мере роста shiftIndex
  * (до пола). `candidates` — объекты зоны, из которых можно набрать задания смены;
  * пока у зон нет расставленных объектов (наполняет дизайнер), tasks будет пустым.
+ * Состояние для каждого кандидата берётся только из его собственного
+ * OBJECTS_CATALOG[objectId].repairableStates — иначе, например, надгробию могло
+ * бы выпасть MISSING, хотя по каталогу "пропадать" умеют только переносимые вещи.
  */
 export function getShiftConfig(
   shiftIndex: number,
@@ -31,10 +50,12 @@ export function getShiftConfig(
   candidates: readonly PlacedObject[] = [],
 ): ShiftConfig {
   const taskCount = Math.min(candidates.length, 2 + Math.floor(shiftIndex / 2));
-  const tasks: ShiftTask[] = pickRandom(candidates, taskCount).map((placed) => ({
-    instanceId: placed.instanceId,
-    state: REPAIRABLE_STATES[Math.floor(Math.random() * REPAIRABLE_STATES.length)],
-  }));
+  const tasks: ShiftTask[] = [];
+  for (const placed of pickRandom(candidates, candidates.length)) {
+    if (tasks.length >= taskCount) break;
+    const task = buildTask(placed);
+    if (task) tasks.push(task);
+  }
 
   return {
     shiftIndex,
