@@ -136,6 +136,7 @@ export class Game {
       );
       this.flashlight.update(deltaSec);
       this.hintSystem.update(deltaSec);
+      this.sceneManager.updateAnimations(deltaSec);
 
       const holdingInteract = this.input.isKeyDown("KeyE");
       this.interaction.update(this.sceneManager.getInteractableObjects(), holdingInteract, deltaSec);
@@ -165,8 +166,7 @@ export class Game {
 
     const completed = this.shiftManager.getCompletedTaskIds();
     return config.tasks.map((task) => {
-      const objectId = this.sceneManager.getObjectByInstanceId(task.instanceId)?.userData
-        .objectId as string | undefined;
+      const objectId = this.sceneManager.getBaseObjectId(task.instanceId);
       return {
         label: objectId ? formatTaskLabel(objectId, task.state) : `${task.instanceId} (${task.state})`,
         done: completed.has(task.instanceId),
