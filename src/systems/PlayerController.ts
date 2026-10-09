@@ -13,6 +13,15 @@ const PLAYER_RADIUS = 0.35;
 // (относительно камеры) добавляет шанс зацепить и такие объекты тоже.
 const LOW_RAY_HEIGHT_DROP = 1.1;
 
+// Прыжок — простая баллистика по высоте камеры, без физдвижка (тот же подход, что и
+// у коллизии). JUMP_SPEED/GRAVITY подобраны так, чтобы прыжок перелетал через
+// надгробие/бочку/ящик (ростом до ~0.6м), но не читался как "полёт".
+const JUMP_SPEED = 4.2;
+const GRAVITY = 13;
+// Высота, с которой перешагиваемые (vaultable) круги перестают блокировать — чуть
+// ниже пика прыжка, а не сразу от земли, чтобы отрыв от земли не читерил коллизию.
+const VAULT_CLEAR_HEIGHT = 0.45;
+
 export class PlayerController {
   private readonly moveInput = new THREE.Vector3();
   private readonly yawOnly = new THREE.Euler(0, 0, 0, "YXZ");
@@ -24,6 +33,13 @@ export class PlayerController {
   private readonly tmpPerp = new THREE.Vector3();
   private readonly tmpRayOrigin = new THREE.Vector3();
 
+  // Высота глаз на земле (без прыжка) — отдельно от camera.position.y, который во
+  // время прыжка временно выше. groundEyeY не меняется XZ-движением зоны (та всегда
+  // плоская — см. layout.json, у всех объектов y:0), только teleportTo.
+  private groundEyeY = EYE_HEIGHT;
+  private jumpHeight = 0;
+  private verticalVelocity = 0;
+
   constructor(
     private readonly camera: THREE.PerspectiveCamera,
     private readonly input: InputManager,
@@ -34,7 +50,10 @@ export class PlayerController {
   /** Ставит камеру в точку спавна зоны на высоте глаз — spawnPoint в ZoneLayout
    *  задаёт позицию на уровне пола, а не камеры. */
   teleportTo(spawnPoint: Vec3): void {
-    this.camera.position.set(spawnPoint.x, spawnPoint.y + EYE_HEIGHT, spawnPoint.z);
+    this.groundEyeY = spawnPoint.y + EYE_HEIGHT;
+    this.jumpHeight = 0;
+    this.verticalVelocity = 0;
+    this.camera.position.set(spawnPoint.x, this.groundEyeY, spawnPoint.z);
   }
 
   /** speedMultiplier — например, замедление при переносе предмета (раздел 2 ТЗ).
@@ -63,8 +82,15 @@ export class PlayerController {
       this.yawOnly.y = this.camera.rotation.y;
       this.moveInput.applyEuler(this.yawOnly);
       this.moveInput.multiplyScalar(this.moveSpeed * speedMultiplier * deltaSec);
-      this.moveWithCollision(this.moveInput, collisionCircles, collisionMeshes);
+      // На пике прыжка перешагиваемые (vaultable) круги — надгробия, бочки, ящики,
+      // валуны — не блокируют; меши (забор/дом/ворота/скамья) и невысокие vaultable:
+      // false круги (фонарный столб и т.п.) остаются стеной и в прыжке.
+      const activeCircles =
+        this.jumpHeight > VAULT_CLEAR_HEIGHT ? collisionCircles.filter((c) => !c.vaultable) : collisionCircles;
+      this.moveWithCollision(this.moveInput, activeCircles, collisionMeshes);
     }
+
+    this.updateJump(deltaSec);
 
     const { x: deltaX, y: deltaY } = this.input.consumeMouseDelta();
     this.camera.rotation.y -= deltaX * MOUSE_SENSITIVITY;
@@ -74,6 +100,27 @@ export class PlayerController {
       -Math.PI / 2 + 0.01,
       Math.PI / 2 - 0.01,
     );
+  }
+
+  /** Пробел — прыжок простой баллистикой по высоте камеры (не физдвижок, тот же
+   *  подход, что у коллизии). Только по земле уходит в прыжок — двойной прыжок
+   *  в воздухе не даём. moveWithCollision уже отработал XZ этим кадром, так что
+   *  camera.position.y можно просто переустановить поверх него. */
+  private updateJump(deltaSec: number): void {
+    if (this.input.consumeKeyPress("Space") && this.jumpHeight <= 0) {
+      this.verticalVelocity = JUMP_SPEED;
+    }
+
+    if (this.jumpHeight > 0 || this.verticalVelocity > 0) {
+      this.verticalVelocity -= GRAVITY * deltaSec;
+      this.jumpHeight += this.verticalVelocity * deltaSec;
+      if (this.jumpHeight <= 0) {
+        this.jumpHeight = 0;
+        this.verticalVelocity = 0;
+      }
+    }
+
+    this.camera.position.y = this.groundEyeY + this.jumpHeight;
   }
 
   /** Двигает по осям раздельно (X, потом Z) — так движение вдоль стены не "залипает"

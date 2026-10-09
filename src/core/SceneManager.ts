@@ -13,6 +13,9 @@ export interface CollisionCircle {
   x: number;
   z: number;
   radius: number;
+  /** Невысокое препятствие — прыжком (см. PlayerController) можно перепрыгнуть через
+   *  него; для обычной ходьбы по-прежнему блокирует. */
+  vaultable: boolean;
 }
 
 /** objectId -> состояние -> objectId модели-варианта, которую показать вместо базовой
@@ -71,17 +74,26 @@ const LANTERN_HANG_OFFSET_Y = -0.68;
 // обе высоты), а bounding box дерева считается по всей кроне — круг получился бы
 // в разы шире реального ствола и сделал бы непроходимой зону, где физически пройти
 // можно (под кроной, в стороне от ствола).
-const STATIC_CIRCLE_NAME_PATTERNS = [/^lamp_post_/, /^barrels?_/, /^crates?_/, /^bench_wood/, /^pedestal_/];
+// vaultable: true только для бочек/ящиков — невысокие, прыжком через них разумно
+// перескочить (как и у надгробий-инстансов, см. objects.catalog.ts). Фонарный столб,
+// скамья и постамент выше/сложнее по силуэту — остаются сплошной стеной и при прыжке.
+const STATIC_CIRCLE_NAME_PATTERNS: { pattern: RegExp; vaultable: boolean }[] = [
+  { pattern: /^lamp_post_/, vaultable: false },
+  { pattern: /^barrels?_/, vaultable: true },
+  { pattern: /^crates?_/, vaultable: true },
+  { pattern: /^bench_wood/, vaultable: false },
+  { pattern: /^pedestal_/, vaultable: false },
+];
 const ROCK_MESH_NAME_PATTERN = /^rocks_/;
 const ROCK_MIN_COLLISION_RADIUS = 0.4;
 
-function computeBoundingCircle(mesh: THREE.Mesh): CollisionCircle {
+function computeBoundingCircle(mesh: THREE.Mesh, vaultable: boolean): CollisionCircle {
   mesh.geometry.computeBoundingBox();
   const box = mesh.geometry.boundingBox?.clone() ?? new THREE.Box3();
   box.applyMatrix4(mesh.matrixWorld);
   const center = box.getCenter(new THREE.Vector3());
   const size = box.getSize(new THREE.Vector3());
-  return { x: center.x, z: center.z, radius: Math.max(size.x, size.z) / 2 };
+  return { x: center.x, z: center.z, radius: Math.max(size.x, size.z) / 2, vaultable };
 }
 
 /** Разбивает один слитый меш на несвязные "острова" геометрии (например, отдельные
@@ -89,7 +101,7 @@ function computeBoundingCircle(mesh: THREE.Mesh): CollisionCircle {
  *  делят вершины) и считает bounding-круг для каждого острова отдельно, в мировых
  *  координатах. Группировка — по квантованной позиции вершины (а не по индексу),
  *  чтобы одинаково работать и с indexed-, и с non-indexed-геометрией из экспортера. */
-function computeIslandCircles(mesh: THREE.Mesh, minRadius: number): CollisionCircle[] {
+function computeIslandCircles(mesh: THREE.Mesh, minRadius: number, vaultable: boolean): CollisionCircle[] {
   const position = mesh.geometry.attributes.position;
   const index = mesh.geometry.index;
   const triangleCount = (index ? index.count : position.count) / 3;
@@ -143,7 +155,7 @@ function computeIslandCircles(mesh: THREE.Mesh, minRadius: number): CollisionCir
     const center = box.getCenter(new THREE.Vector3());
     const size = box.getSize(new THREE.Vector3());
     const radius = Math.max(size.x, size.z) / 2;
-    if (radius >= minRadius) circles.push({ x: center.x, z: center.z, radius });
+    if (radius >= minRadius) circles.push({ x: center.x, z: center.z, radius, vaultable });
   }
   return circles;
 }
@@ -242,10 +254,11 @@ export class SceneManager {
       this.staticGeometry = zoneScene;
       zoneScene.traverse((node) => {
         if (!(node instanceof THREE.Mesh)) return;
-        if (STATIC_CIRCLE_NAME_PATTERNS.some((p) => p.test(node.name))) {
-          this.staticCollisionCircles.push(computeBoundingCircle(node));
+        const staticMatch = STATIC_CIRCLE_NAME_PATTERNS.find((p) => p.pattern.test(node.name));
+        if (staticMatch) {
+          this.staticCollisionCircles.push(computeBoundingCircle(node, staticMatch.vaultable));
         } else if (ROCK_MESH_NAME_PATTERN.test(node.name)) {
-          this.staticCollisionCircles.push(...computeIslandCircles(node, ROCK_MIN_COLLISION_RADIUS));
+          this.staticCollisionCircles.push(...computeIslandCircles(node, ROCK_MIN_COLLISION_RADIUS, true));
         }
       });
     } catch (error) {
@@ -509,9 +522,14 @@ export class SceneManager {
     const circles: CollisionCircle[] = [...this.staticCollisionCircles];
     for (const object of this.objectsById.values()) {
       const objectId = object.userData.objectId as string | undefined;
-      const radius = objectId ? OBJECTS_CATALOG[objectId]?.collisionRadius : undefined;
-      if (!radius) continue;
-      circles.push({ x: object.position.x, z: object.position.z, radius });
+      const catalogEntry = objectId ? OBJECTS_CATALOG[objectId] : undefined;
+      if (!catalogEntry?.collisionRadius) continue;
+      circles.push({
+        x: object.position.x,
+        z: object.position.z,
+        radius: catalogEntry.collisionRadius,
+        vaultable: catalogEntry.vaultable ?? false,
+      });
     }
     return circles;
   }

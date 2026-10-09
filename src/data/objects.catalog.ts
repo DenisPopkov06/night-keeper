@@ -56,12 +56,13 @@ const GRAVESTONE_STATES = [ObjectState.DISPLACED, ObjectState.FALLEN, ObjectStat
 // дизайнер может поправить под реальные размеры моделей.
 const GRAVESTONE_COLLISION_RADIUS = 0.4;
 
-function decor(objectId: string, collisionRadius?: number): ObjectCatalogEntry {
+function decor(objectId: string, collisionRadius?: number, vaultable?: boolean): ObjectCatalogEntry {
   return {
     modelPath: `models/props/${objectId}.glb`,
     interactable: false,
     repairableStates: [],
     ...(collisionRadius !== undefined && { collisionRadius }),
+    ...(vaultable !== undefined && { vaultable }),
   };
 }
 
@@ -90,18 +91,21 @@ export const OBJECTS_CATALOG: Record<string, ObjectCatalogEntry> = {
     interactable: true,
     repairableStates: GRAVESTONE_STATES,
     collisionRadius: GRAVESTONE_COLLISION_RADIUS,
+    vaultable: true,
   },
   gravestone_arch_a: {
     modelPath: "models/props/gravestone_arch_a.glb",
     interactable: true,
     repairableStates: GRAVESTONE_STATES,
     collisionRadius: GRAVESTONE_COLLISION_RADIUS,
+    vaultable: true,
   },
   gravestone_slab_a: {
     modelPath: "models/props/gravestone_slab_a.glb",
     interactable: true,
     repairableStates: GRAVESTONE_STATES,
     collisionRadius: GRAVESTONE_COLLISION_RADIUS,
+    vaultable: true,
   },
   // pot_clay_a (ниже, среди переносимых) заменил vase_clay_01 — тот же горшок, вторая
   // попытка дизайнера; старую модель из каталога убрал, чтобы на карте не было двух
@@ -125,10 +129,10 @@ export const OBJECTS_CATALOG: Record<string, ObjectCatalogEntry> = {
   fence_wood_a: decorMesh("fence_wood_a"),
   fence_wood_b: decorMesh("fence_wood_b"),
   bench_wood_a: decorMesh("bench_wood_a"),
-  crate_wood_a: decor("crate_wood_a", 0.4),
-  barrel_wood_a: decor("barrel_wood_a", 0.35),
+  crate_wood_a: decor("crate_wood_a", 0.4, true),
+  barrel_wood_a: decor("barrel_wood_a", 0.35, true),
   pedestal_cross_a: decor("pedestal_cross_a", 0.55),
-  rock_mossy_a: decor("rock_mossy_a", 0.8),
+  rock_mossy_a: decor("rock_mossy_a", 0.8, true),
   rock_mossy_b: decor("rock_mossy_b"),
   grass_tuft_a: decor("grass_tuft_a"),
   flowers_wild_a: decor("flowers_wild_a"),
@@ -140,13 +144,13 @@ export const OBJECTS_CATALOG: Record<string, ObjectCatalogEntry> = {
 
   // Варианты надгробий по арт-листу (assets_src/blender/bake_props.py, текстуры запечены): разрушенные —
   // заготовки визуала для BROKEN/FALLEN вместо целого камня; наклонённые — «просевшая земля».
-  gravestone_cross_broken_a: decor("gravestone_cross_broken_a", 0.4),
-  gravestone_slab_broken_a: decor("gravestone_slab_broken_a", 0.6),
-  gravestone_rubble_a: decor("gravestone_rubble_a", 0.45),
-  gravestone_arch_broken_a: decor("gravestone_arch_broken_a", 0.4),
-  gravestone_cross_tilted_a: decor("gravestone_cross_tilted_a", 0.45),
-  gravestone_arch_tilted_a: decor("gravestone_arch_tilted_a", 0.45),
-  gravestone_headstone_tilted_a: decor("gravestone_headstone_tilted_a", 0.45),
+  gravestone_cross_broken_a: decor("gravestone_cross_broken_a", 0.4, true),
+  gravestone_slab_broken_a: decor("gravestone_slab_broken_a", 0.6, true),
+  gravestone_rubble_a: decor("gravestone_rubble_a", 0.45, true),
+  gravestone_arch_broken_a: decor("gravestone_arch_broken_a", 0.4, true),
+  gravestone_cross_tilted_a: decor("gravestone_cross_tilted_a", 0.45, true),
+  gravestone_arch_tilted_a: decor("gravestone_arch_tilted_a", 0.45, true),
+  gravestone_headstone_tilted_a: decor("gravestone_headstone_tilted_a", 0.45, true),
 
   // Венки (≈ 0.55 × 0.6 м с листьями, «лицом» к +Z, стоят на хвостах ленты — прислонить
   // к надгробию) и цветы (пучки на земле) — переносимые предметы заданий (раздел 4.2 ТЗ):
