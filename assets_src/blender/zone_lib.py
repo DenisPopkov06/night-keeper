@@ -1230,7 +1230,7 @@ GRID_HALF, GRID_STEP = 84.0, 4.0
 ROAD_X = lambda y: 0.9 * math.sin(y * 0.06)          # дорога от ворот на юг: ось по x в зависимости от y
 HILLS = ((64.0, -14.0, 30.0, 18.0), (-60.0, 54.0, 27.0, 14.0), (6.0, 72.0, 36.0, 12.0),
          (-72.0, -30.0, 24.0, 11.0), (46.0, 62.0, 22.0, 9.0))     # дальние холмы: x, y, радиус, высота
-MOON_POS_GLTF = (15.0, 25.0, 10.0)                   # = LIGHTING_CONFIG.moonPosition (src/render/Lighting.ts), координаты glTF
+MOON_POS_GLTF = (-15.0, 25.0, -10.0)                 # = LIGHTING_CONFIG.moonPosition (src/render/Lighting.ts), координаты glTF
 MOON_COLOR = (0.55, 0.68, 1.0)
 MOON_POWER = 1.0
 
