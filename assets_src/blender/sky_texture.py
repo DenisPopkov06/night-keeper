@@ -28,7 +28,7 @@ import zone_textures as ZT  # noqa: E402  (pnoise, sstep)
 REPO = os.path.abspath(os.path.join(HERE, "..", ".."))
 OUT = os.path.join(REPO, "public", "textures", "sky_night.jpg")
 W, H = 4096, 2048                      # 0.088° на пиксель
-MOON_POS = (15.0, 25.0, 10.0)          # = LIGHTING_CONFIG.moonPosition
+MOON_POS = (-15.0, 25.0, -10.0)        # = LIGHTING_CONFIG.moonPosition (знаки x/z перевернуты бэкендом — луна перед игроком на спавне)
 MOON_R_DEG = 3.6                       # угловой радиус диска (стилизованно крупный: реальная луна ≈ 0.25°)
 FOG_RGB = np.array([28, 44, 76], np.float32) / 255.0   # рекомендуемый LIGHTING_CONFIG.fogColor = 0x1c2c4c: дальний лес тает в дымке неба
 
