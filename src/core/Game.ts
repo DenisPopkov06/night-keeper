@@ -124,7 +124,12 @@ export class Game {
     const interactPressed = this.input.consumeKeyPress("KeyE");
 
     if (!this.pauseMenu.isVisible()) {
-      this.playerController.update(deltaSec, this.interaction.getMoveSpeedMultiplier());
+      this.playerController.update(
+        deltaSec,
+        this.interaction.getMoveSpeedMultiplier(),
+        this.sceneManager.getCollisionCircles(),
+        this.sceneManager.getStaticCollisionMeshes(),
+      );
       this.flashlight.update(deltaSec);
       this.hintSystem.update(deltaSec);
 
@@ -143,6 +148,10 @@ export class Game {
       tasks: this.buildHudTasks(),
       interactionPrompt: this.interaction.getInteractionPrompt(),
       nearestTaskDirection: this.buildNearestTaskDirection(),
+      // Пока открыт экран (пауза/итоги) — подсказка про захват курсора неуместна,
+      // хоть курсор формально и не захвачен.
+      pointerLocked:
+        this.pauseMenu.isVisible() || this.shiftReportScreen.isVisible() || this.input.isPointerLocked(),
     });
   }
 
@@ -196,6 +205,9 @@ export class Game {
     if (this.pauseMenu.isVisible()) {
       this.pauseMenu.hide();
       this.clock.resume();
+      // Без этого пришлось бы ещё раз кликать по канвасу, чтобы заново поймать
+      // курсор — браузер сам снимает pointer lock при открытии паузы (Escape).
+      this.input.requestPointerLock();
     } else {
       this.pauseMenu.show();
       this.clock.pause();
