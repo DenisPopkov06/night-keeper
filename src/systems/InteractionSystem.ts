@@ -2,10 +2,14 @@ import * as THREE from "three";
 import { ObjectState } from "@/data/types";
 import { ObjectStateMachine } from "@/systems/ObjectStateMachine";
 import { ShiftManager } from "@/systems/ShiftManager";
+import { SceneManager } from "@/core/SceneManager";
 
 const HIGHLIGHT_EMISSIVE = new THREE.Color(0x3a3a1a);
 const HIGHLIGHT_INTENSITY = 0.8;
 const DEFAULT_REPAIR_SEC = 2;
+const PLACEMENT_RADIUS = 2;
+const CARRY_SPEED_MULTIPLIER = 0.7;
+const CARRY_OFFSET = new THREE.Vector3(0.25, -0.3, -0.8);
 
 interface HighlightEntry {
   mesh: THREE.Mesh;
@@ -21,14 +25,24 @@ export class InteractionSystem {
   private repairingInstanceId: string | null = null;
   private repairRemainingSec = 0;
 
+  private carriedObject: THREE.Object3D | null = null;
+  private carriedInstanceId: string | null = null;
+
   constructor(
     private readonly camera: THREE.Camera,
     private readonly stateMachine: ObjectStateMachine,
     private readonly shiftManager: ShiftManager,
+    private readonly sceneManager: SceneManager,
   ) {}
 
   /** holdingInteract — зажата ли клавиша взаимодействия (для таймера ремонта BROKEN). */
   update(interactables: THREE.Object3D[], holdingInteract: boolean, deltaSec: number): void {
+    // Руки заняты переносимым предметом — наводиться/подсвечивать больше нечего.
+    if (this.carriedObject) {
+      this.cancelRepair();
+      return;
+    }
+
     this.raycaster.setFromCamera(this.centerScreen, this.camera);
     const [hit] = this.raycaster.intersectObjects(interactables, true);
     const nextRoot = hit ? this.findInteractableRoot(hit.object, interactables) : null;
@@ -51,15 +65,24 @@ export class InteractionSystem {
     }
   }
 
-  /** Нажатие E: мгновенный ремонт для большинства состояний, таймер для BROKEN. */
+  /** Нажатие E: мгновенный ремонт/подбор для большинства состояний, таймер для BROKEN,
+   *  взять/положить для MISSING. */
   interact(): void {
+    if (this.carriedObject) {
+      this.putDownCarried();
+      return;
+    }
+
     const instanceId = this.focusedRoot?.userData.instanceId as string | undefined;
     if (!instanceId || this.repairingInstanceId === instanceId) return;
 
     const state = this.stateMachine.getState(instanceId);
-    // MISSING чинится не кликом по надгробию, а поиском и возвратом пропавшего
-    // предмета — это отдельная механика подбора предметов, вне этой системы.
-    if (state === ObjectState.NORMAL || state === ObjectState.MISSING) return;
+    if (state === ObjectState.NORMAL) return;
+
+    if (state === ObjectState.MISSING) {
+      this.pickUp(this.focusedRoot as THREE.Object3D, instanceId);
+      return;
+    }
 
     if (state === ObjectState.BROKEN) {
       const task = this.shiftManager.getCurrentConfig()?.tasks.find((t) => t.instanceId === instanceId);
@@ -78,6 +101,73 @@ export class InteractionSystem {
   getRepairProgress(): { instanceId: string; remainingSec: number } | null {
     if (!this.repairingInstanceId) return null;
     return { instanceId: this.repairingInstanceId, remainingSec: this.repairRemainingSec };
+  }
+
+  isCarrying(): boolean {
+    return this.carriedObject !== null;
+  }
+
+  /** Вызывается в конце смены: если игрок что-то нёс в руках, кладёт это обратно
+   *  на точку привязки, чтобы предмет не "улетел" в руках в следующую смену
+   *  (задача всё равно не считается выполненной — её не было на момент завершения). */
+  forceDropCarried(): void {
+    if (!this.carriedObject || !this.carriedInstanceId) return;
+    const anchor = this.sceneManager.getAnchorTransform(this.carriedInstanceId);
+    if (anchor) this.sceneManager.placeCarriedObject(this.carriedObject, anchor.position, anchor.rotationY);
+    this.carriedObject = null;
+    this.carriedInstanceId = null;
+  }
+
+  /** Множитель скорости движения, пока в руках предмет (раздел 2 ТЗ по геймплею). */
+  getMoveSpeedMultiplier(): number {
+    return this.carriedObject ? CARRY_SPEED_MULTIPLIER : 1;
+  }
+
+  /** Объект "крепится перед камерой" — снимается с текущего родителя и становится
+   *  ребёнком камеры с фиксированным оффсетом, как держат предмет в руках. */
+  private pickUp(object: THREE.Object3D, instanceId: string): void {
+    this.clearHighlight();
+    this.focusedRoot = null;
+
+    object.removeFromParent();
+    object.position.copy(CARRY_OFFSET);
+    object.rotation.set(0, 0, 0);
+    this.camera.add(object);
+
+    this.carriedObject = object;
+    this.carriedInstanceId = instanceId;
+  }
+
+  /** Рядом с точкой привязки — ставит предмет на место и завершает задачу;
+   *  иначе просто кладёт там, где стоит игрок (не засчитывается). */
+  private putDownCarried(): void {
+    const object = this.carriedObject;
+    const instanceId = this.carriedInstanceId;
+    if (!object || !instanceId) return;
+
+    const playerPosition = new THREE.Vector3();
+    this.camera.getWorldPosition(playerPosition);
+
+    const anchor = this.sceneManager.getAnchorTransform(instanceId);
+    const anchorPosition = anchor
+      ? new THREE.Vector3(anchor.position.x, anchor.position.y, anchor.position.z)
+      : null;
+    const atAnchor = anchorPosition !== null && playerPosition.distanceTo(anchorPosition) <= PLACEMENT_RADIUS;
+
+    if (atAnchor && anchor) {
+      this.sceneManager.placeCarriedObject(object, anchor.position, anchor.rotationY);
+      this.stateMachine.transition(instanceId, ObjectState.NORMAL);
+    } else {
+      const groundY = anchor?.position.y ?? playerPosition.y;
+      this.sceneManager.placeCarriedObject(
+        object,
+        { x: playerPosition.x, y: groundY, z: playerPosition.z },
+        0,
+      );
+    }
+
+    this.carriedObject = null;
+    this.carriedInstanceId = null;
   }
 
   private completeRepair(): void {

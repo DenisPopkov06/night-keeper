@@ -25,7 +25,8 @@ export class PlayerController {
     this.camera.position.set(spawnPoint.x, spawnPoint.y + EYE_HEIGHT, spawnPoint.z);
   }
 
-  update(deltaSec: number): void {
+  /** speedMultiplier — например, замедление при переносе предмета (раздел 2 ТЗ). */
+  update(deltaSec: number, speedMultiplier = 1): void {
     this.moveInput.set(0, 0, 0);
     if (this.input.isKeyDown("KeyW")) this.moveInput.z -= 1;
     if (this.input.isKeyDown("KeyS")) this.moveInput.z += 1;
@@ -40,7 +41,7 @@ export class PlayerController {
       if (this.moveInput.lengthSq() > 1) this.moveInput.normalize();
       this.yawOnly.y = this.camera.rotation.y;
       this.moveInput.applyEuler(this.yawOnly);
-      this.camera.position.addScaledVector(this.moveInput, this.moveSpeed * deltaSec);
+      this.camera.position.addScaledVector(this.moveInput, this.moveSpeed * speedMultiplier * deltaSec);
     }
 
     const { x: deltaX, y: deltaY } = this.input.consumeMouseDelta();
