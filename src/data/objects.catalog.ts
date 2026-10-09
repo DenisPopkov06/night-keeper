@@ -38,6 +38,8 @@
 //   - имя файла текстуры: <objectId>_albedo / _normal / _orm
 //   - у замкнутых мешей — одностороннее отображение (backface culling), без doubleSided
 //   - пропсы строит и запекает assets_src/blender/bake_props.py (тексты надписей — в словаре PROPS)
+//   - детали зоны по отдельности (деревья, дом, ворота, фонарь, забор, бабочка, ...) — assets_src/blender/props_kit.py:
+//     та же геометрия и бесшовные тайлы, что в модели зоны; origin — центр основания, «перед» модели смотрит на +Z
 //   - зона: земля — ОДНА уникальная карта ground_old_cemetery_* (без тайлов и повторов); бесшовные тайлы tile_<имя>_albedo|normal|orm (дерево, кора, камень) —
 //     повтор по мировым UV; строит assets_src/blender/zone_textures.py, геометрию — zone_lib.py
 
@@ -48,6 +50,15 @@ const GRAVESTONE_STATES = [ObjectState.DISPLACED, ObjectState.FALLEN, ObjectStat
 // collisionRadius (м) — стартовая прикидка по типовому габариту надгробия,
 // дизайнер может поправить под реальные размеры моделей.
 const GRAVESTONE_COLLISION_RADIUS = 0.4;
+
+function decor(objectId: string, collisionRadius?: number): ObjectCatalogEntry {
+  return {
+    modelPath: `models/props/${objectId}.glb`,
+    interactable: false,
+    repairableStates: [],
+    ...(collisionRadius !== undefined && { collisionRadius }),
+  };
+}
 
 export const OBJECTS_CATALOG: Record<string, ObjectCatalogEntry> = {
   gravestone_cross_a: {
@@ -74,5 +85,32 @@ export const OBJECTS_CATALOG: Record<string, ObjectCatalogEntry> = {
     repairableStates: [ObjectState.MISSING, ObjectState.DISPLACED],
     // Без collisionRadius — маленький переносимый предмет, сквозь него проходить можно.
   },
+
+  // Декор — отдельные модели деталей зоны (props_kit.py): без задач и взаимодействия.
+  // collisionRadius — по стволу/основанию. Дому, воротам, забору и скамье круг не подходит
+  // (длинные/с проходом) — у них коллизии пока нет.
+  tree_oak_a: decor("tree_oak_a", 0.6),
+  tree_oak_b: decor("tree_oak_b", 0.5),
+  tree_leafy_c: decor("tree_leafy_c", 0.45),
+  tree_dead_a: decor("tree_dead_a", 0.5),
+  house_keeper_a: decor("house_keeper_a"),
+  gate_stone_a: decor("gate_stone_a"),
+  lamp_post_a: decor("lamp_post_a", 0.3),
+  // Подвесной фонарь: origin — точка подвеса, модель висит вниз на 0.68 м.
+  lantern_iron_a: decor("lantern_iron_a"),
+  // Секция 2.4 м вдоль X, origin — середина пролёта; в ряд ставить с шагом 2.4 м. b — сломанная.
+  fence_wood_a: decor("fence_wood_a"),
+  fence_wood_b: decor("fence_wood_b"),
+  bench_wood_a: decor("bench_wood_a"),
+  crate_wood_a: decor("crate_wood_a", 0.4),
+  barrel_wood_a: decor("barrel_wood_a", 0.35),
+  pot_clay_a: decor("pot_clay_a"),
+  pedestal_cross_a: decor("pedestal_cross_a", 0.55),
+  rock_mossy_a: decor("rock_mossy_a", 0.8),
+  rock_mossy_b: decor("rock_mossy_b"),
+  grass_tuft_a: decor("grass_tuft_a"),
+  flowers_wild_a: decor("flowers_wild_a"),
+  // Бабочка (размах 0.16 м), голова на +Z; в .glb анимация взмаха крыльев «flap» (0.25 с, по кругу).
+  butterfly_blue_a: decor("butterfly_blue_a"),
   // ...остальные объекты по мере добавления дизайнером
 };
