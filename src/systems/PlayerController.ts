@@ -17,6 +17,8 @@ export class PlayerController {
   private readonly tmpStep = new THREE.Vector3();
   private readonly tmpNextPos = new THREE.Vector3();
   private readonly tmpDirection = new THREE.Vector3();
+  private readonly tmpPerp = new THREE.Vector3();
+  private readonly tmpRayOrigin = new THREE.Vector3();
 
   constructor(
     private readonly camera: THREE.PerspectiveCamera,
@@ -103,9 +105,20 @@ export class PlayerController {
     if (meshes.length > 0) {
       const stepLength = step.length();
       this.tmpDirection.copy(step).normalize();
-      this.raycaster.set(this.camera.position, this.tmpDirection);
       this.raycaster.far = stepLength + PLAYER_RADIUS;
-      if (this.raycaster.intersectObjects(meshes as THREE.Object3D[], true).length > 0) return true;
+
+      // Один луч точно по курсу движения ловит только то, что прямо по центру —
+      // ствол дерева/столб фонаря чуть в стороне от линии движения он бы пропустил
+      // (игрок проходил бы в него на часть своего радиуса). Поэтому с запасом
+      // проверяем ещё по лучу слева и справа на ширине PLAYER_RADIUS.
+      this.tmpPerp.set(-this.tmpDirection.z, 0, this.tmpDirection.x).multiplyScalar(PLAYER_RADIUS);
+
+      for (const sign of [0, 1, -1]) {
+        this.tmpRayOrigin.copy(this.camera.position);
+        if (sign !== 0) this.tmpRayOrigin.addScaledVector(this.tmpPerp, sign);
+        this.raycaster.set(this.tmpRayOrigin, this.tmpDirection);
+        if (this.raycaster.intersectObjects(meshes as THREE.Object3D[], true).length > 0) return true;
+      }
     }
 
     return false;
