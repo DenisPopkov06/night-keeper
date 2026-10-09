@@ -14,13 +14,18 @@ const PLAYER_RADIUS = 0.35;
 const LOW_RAY_HEIGHT_DROP = 1.1;
 
 // Прыжок — простая баллистика по высоте камеры, без физдвижка (тот же подход, что и
-// у коллизии). JUMP_SPEED/GRAVITY подобраны так, чтобы прыжок перелетал через
-// надгробие/бочку/ящик (ростом до ~0.6м), но не читался как "полёт".
-const JUMP_SPEED = 4.2;
-const GRAVITY = 13;
+// у коллизии). Пик ~1.2м, в воздухе ~0.95с — достаточно заметная дуга (а не "тэп"),
+// при этом перелетает надгробие/бочку/валун с запасом по времени на горизонтальное
+// перемещение, не только по высоте.
+const JUMP_SPEED = 5.2;
+const GRAVITY = 11;
 // Высота, с которой перешагиваемые (vaultable) круги перестают блокировать — чуть
 // ниже пика прыжка, а не сразу от земли, чтобы отрыв от земли не читерил коллизию.
-const VAULT_CLEAR_HEIGHT = 0.45;
+const VAULT_CLEAR_HEIGHT = 0.4;
+// Скорость (м/с), с которой игрока плавно выталкивает из круга, если он всё же
+// приземлился внутри — не мгновенный "телепорт" на границу, а быстрое, но плавное
+// соскальзывание наружу за несколько кадров.
+const PUSH_OUT_SPEED = 5;
 
 export class PlayerController {
   private readonly moveInput = new THREE.Vector3();
@@ -88,8 +93,8 @@ export class PlayerController {
     this.updateJump(deltaSec);
     // Если прыжок перенёс игрока почти через надгробие/валун/бочку, но высоты не
     // хватило пройти его целиком (приземлился ещё внутри minDist) — выталкиваем
-    // наружу сразу же, а не оставляем "застрявшим" до следующего прыжка.
-    this.resolveCircleOverlaps(this.activeCircles(collisionCircles));
+    // наружу, а не оставляем "застрявшим" до следующего прыжка.
+    this.resolveCircleOverlaps(this.activeCircles(collisionCircles), deltaSec);
 
     const { x: deltaX, y: deltaY } = this.input.consumeMouseDelta();
     this.camera.rotation.y -= deltaX * MOUSE_SENSITIVITY;
@@ -133,8 +138,11 @@ export class PlayerController {
    *  блокирует шаг туда, как isBlocked) — иначе застревание внутри (неудачное
    *  приземление после прыжка через невысокий объект) было бы неисправимым без
    *  повторного прыжка: любой шаг наружу тоже на долю секунды остаётся внутри
-   *  minDist и blocking-проверка в isBlocked его бы тоже отклонила. */
-  private resolveCircleOverlaps(circles: readonly CollisionCircle[]): void {
+   *  minDist и blocking-проверка в isBlocked его бы тоже отклонила. Выталкивает не
+   *  мгновенно на границу (ощущалось бы телепортом), а с ограниченной скоростью —
+   *  плавное соскальзывание наружу за несколько кадров. */
+  private resolveCircleOverlaps(circles: readonly CollisionCircle[], deltaSec: number): void {
+    const maxStep = PUSH_OUT_SPEED * deltaSec;
     for (const circle of circles) {
       const dx = this.camera.position.x - circle.x;
       const dz = this.camera.position.z - circle.z;
@@ -144,10 +152,10 @@ export class PlayerController {
 
       const dist = Math.sqrt(distSq);
       if (dist < 1e-4) {
-        this.camera.position.x += minDist;
+        this.camera.position.x += Math.min(minDist, maxStep);
         continue;
       }
-      const push = (minDist - dist) / dist;
+      const push = Math.min(minDist - dist, maxStep) / dist;
       this.camera.position.x += dx * push;
       this.camera.position.z += dz * push;
     }
