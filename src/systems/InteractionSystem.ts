@@ -81,12 +81,22 @@ export class InteractionSystem {
     const state = this.stateMachine.getState(instanceId);
     if (state === ObjectState.NORMAL) return;
 
+    // Чинить/поднимать можно только то, что реально входит в задания текущей
+    // смены — иначе объект, оставшийся в непройденном состоянии с прошлой
+    // смены (см. ShiftManager.startShift), можно было бы поправить "бесплатно",
+    // хотя это уже не задача.
+    const isActiveTask = this.shiftManager.getCurrentConfig()?.tasks.some((t) => t.instanceId === instanceId) ?? false;
+    if (!isActiveTask) return;
+
     if (state === ObjectState.MISSING) {
       this.pickUp(this.focusedRoot as THREE.Object3D, instanceId);
       return;
     }
 
-    if (state === ObjectState.BROKEN) {
+    const needsTimedRepair =
+      state === ObjectState.BROKEN ||
+      (state === ObjectState.FALLEN && this.sceneManager.isFallenLikeBroken(instanceId));
+    if (needsTimedRepair) {
       const task = this.shiftManager.getCurrentConfig()?.tasks.find((t) => t.instanceId === instanceId);
       this.repairingInstanceId = instanceId;
       this.repairRemainingSec = task?.repairTimeSec ?? DEFAULT_REPAIR_SEC;
@@ -114,13 +124,16 @@ export class InteractionSystem {
 
     if (this.repairingInstanceId === instanceId) return "Удерживайте E…";
 
-    switch (this.stateMachine.getState(instanceId)) {
+    const state = this.stateMachine.getState(instanceId);
+    switch (state) {
       case ObjectState.NORMAL:
         return null;
       case ObjectState.MISSING:
         return "E — поднять";
       case ObjectState.BROKEN:
         return "Удерживайте E — починить";
+      case ObjectState.FALLEN:
+        return this.sceneManager.isFallenLikeBroken(instanceId) ? "Удерживайте E — починить" : "E — поправить";
       default:
         return "E — поправить";
     }

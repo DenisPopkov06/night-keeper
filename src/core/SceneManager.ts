@@ -15,6 +15,139 @@ export interface CollisionCircle {
   radius: number;
 }
 
+/** objectId -> состояние -> objectId модели-варианта, которую показать вместо базовой
+ *  (разрушенные/наклонённые надгробия по арт-листу дизайнера, см. objects.catalog.ts).
+ *  Для комбинаций без варианта (например, DISPLACED у gravestone_slab_a — наклонённого
+ *  варианта плиты пока нет) используется запасной геометрический сдвиг/поворот. */
+const VARIANT_MODEL_BY_STATE: Partial<Record<string, Partial<Record<ObjectState, string>>>> = {
+  gravestone_cross_a: {
+    [ObjectState.BROKEN]: "gravestone_cross_broken_a",
+    [ObjectState.FALLEN]: "gravestone_cross_broken_a",
+    [ObjectState.DISPLACED]: "gravestone_cross_tilted_a",
+  },
+  gravestone_arch_a: {
+    [ObjectState.BROKEN]: "gravestone_arch_broken_a",
+    [ObjectState.FALLEN]: "gravestone_arch_broken_a",
+    [ObjectState.DISPLACED]: "gravestone_arch_tilted_a",
+  },
+  gravestone_slab_a: {
+    [ObjectState.BROKEN]: "gravestone_slab_broken_a",
+    [ObjectState.FALLEN]: "gravestone_slab_broken_a",
+  },
+};
+
+/** Для cross/arch/slab FALLEN показывает ту же "расколотую" модель, что и BROKEN
+ *  (отдельного визуала "упавшего, но целого" надгrobия пока нет, см. комментарий
+ *  выше) — значит, по факту это одно и то же состояние на экране и должно требовать
+ *  того же ремонта (удержание E, "почините"), а не мгновенного "поправить" как у
+ *  просто сдвинутого (DISPLACED) надгробия. У переносимых предметов (венки) FALLEN
+ *  выглядит иначе (запасной наклон, не "расколото") — для них это не относится. */
+function fallenLooksBroken(baseObjectId: string): boolean {
+  const variants = VARIANT_MODEL_BY_STATE[baseObjectId];
+  const fallenVariant = variants?.[ObjectState.FALLEN];
+  return fallenVariant !== undefined && fallenVariant === variants?.[ObjectState.BROKEN];
+}
+
+// Подвесной фонарь (lantern_iron_a): origin — точка подвеса, плафон висит на 0.68м ниже
+// (комментарий дизайнера в каталоге); у отдельной модели, в отличие от запечённой в зону,
+// нет своего источника света в .glb — добавляем его сами.
+const LANTERN_OBJECT_ID = "lantern_iron_a";
+const LANTERN_HANG_OFFSET_Y = -0.68;
+
+// Статическая геометрия зоны — один слитый меш без отдельных PlacedObject, поэтому
+// коллизия для этих именованных "крупных" деталей внутри нет считается по кругу,
+// построенному из реального bounding box (по имени меша из Blender). Луч здесь не
+// годится универсально — например, у скамьи тонкие ножки, луч на любой высоте может
+// пройти между ними, хотя по силуэту она сплошная (та же причина, по которой сквозь
+// крупный валун можно было пройти: приплюснутая икосфера невысокая, оба уровня луча
+// иногда проходят мимо). rocks_a сюда не входит — это один слитый меш рассыпанной
+// по всей зоне гальки (несколько кластеров по 1 крупному + 2-3 мелких валуна,
+// assets_src/blender/zone_lib.py build_rocks) — единый bounding box для него был бы
+// в размер всей зоны. Вместо этого для rocks_* считаем круг отдельно на каждый
+// "остров" геометрии (физически не соприкасающиеся валуны не делят вершины, см.
+// computeIslandCircles) и оставляем только острова крупнее ROCK_MIN_COLLISION_RADIUS —
+// мелкую гальку (r 0.14-0.34) можно спокойно перешагнуть, блокировать её не нужно.
+// tree_ намеренно не здесь: ствол дерева и так надёжно ловится лучом (проходит через
+// обе высоты), а bounding box дерева считается по всей кроне — круг получился бы
+// в разы шире реального ствола и сделал бы непроходимой зону, где физически пройти
+// можно (под кроной, в стороне от ствола).
+const STATIC_CIRCLE_NAME_PATTERNS = [/^lamp_post_/, /^barrels?_/, /^crates?_/, /^bench_wood/, /^pedestal_/];
+const ROCK_MESH_NAME_PATTERN = /^rocks_/;
+const ROCK_MIN_COLLISION_RADIUS = 0.4;
+
+function computeBoundingCircle(mesh: THREE.Mesh): CollisionCircle {
+  mesh.geometry.computeBoundingBox();
+  const box = mesh.geometry.boundingBox?.clone() ?? new THREE.Box3();
+  box.applyMatrix4(mesh.matrixWorld);
+  const center = box.getCenter(new THREE.Vector3());
+  const size = box.getSize(new THREE.Vector3());
+  return { x: center.x, z: center.z, radius: Math.max(size.x, size.z) / 2 };
+}
+
+/** Разбивает один слитый меш на несвязные "острова" геометрии (например, отдельные
+ *  валуны в rocks_a, нигде физически не соприкасающиеся друг с другом — значит, не
+ *  делят вершины) и считает bounding-круг для каждого острова отдельно, в мировых
+ *  координатах. Группировка — по квантованной позиции вершины (а не по индексу),
+ *  чтобы одинаково работать и с indexed-, и с non-indexed-геометрией из экспортера. */
+function computeIslandCircles(mesh: THREE.Mesh, minRadius: number): CollisionCircle[] {
+  const position = mesh.geometry.attributes.position;
+  const index = mesh.geometry.index;
+  const triangleCount = (index ? index.count : position.count) / 3;
+  const vertexIndex = (t: number, corner: number): number =>
+    index ? index.getX(t * 3 + corner) : t * 3 + corner;
+  const keyOf = (i: number): string =>
+    `${Math.round(position.getX(i) * 1000)}_${Math.round(position.getY(i) * 1000)}_${Math.round(position.getZ(i) * 1000)}`;
+
+  const parent = new Map<string, string>();
+  const find = (key: string): string => {
+    let root = key;
+    while (parent.get(root) !== root) root = parent.get(root)!;
+    parent.set(key, root);
+    return root;
+  };
+  const union = (a: string, b: string): void => {
+    const rootA = find(a);
+    const rootB = find(b);
+    if (rootA !== rootB) parent.set(rootA, rootB);
+  };
+
+  const triangles: [number, number, number][] = [];
+  for (let t = 0; t < triangleCount; t++) {
+    const triangle: [number, number, number] = [vertexIndex(t, 0), vertexIndex(t, 1), vertexIndex(t, 2)];
+    triangles.push(triangle);
+    for (const i of triangle) {
+      const key = keyOf(i);
+      if (!parent.has(key)) parent.set(key, key);
+    }
+    union(keyOf(triangle[0]), keyOf(triangle[1]));
+    union(keyOf(triangle[1]), keyOf(triangle[2]));
+  }
+
+  const worldPoint = new THREE.Vector3();
+  const boundsByIsland = new Map<string, THREE.Box3>();
+  for (const triangle of triangles) {
+    for (const i of triangle) {
+      const root = find(keyOf(i));
+      let box = boundsByIsland.get(root);
+      if (!box) {
+        box = new THREE.Box3();
+        boundsByIsland.set(root, box);
+      }
+      worldPoint.set(position.getX(i), position.getY(i), position.getZ(i)).applyMatrix4(mesh.matrixWorld);
+      box.expandByPoint(worldPoint);
+    }
+  }
+
+  const circles: CollisionCircle[] = [];
+  for (const box of boundsByIsland.values()) {
+    const center = box.getCenter(new THREE.Vector3());
+    const size = box.getSize(new THREE.Vector3());
+    const radius = Math.max(size.x, size.z) / 2;
+    if (radius >= minRadius) circles.push({ x: center.x, z: center.z, radius });
+  }
+  return circles;
+}
+
 function disposeObject(root: THREE.Object3D): void {
   root.traverse((node) => {
     if (node instanceof THREE.Mesh) {
@@ -34,6 +167,12 @@ function enableShadows(root: THREE.Object3D): void {
   });
 }
 
+function createLanternLight(): THREE.PointLight {
+  const light = new THREE.PointLight(0xffb84d, 10, 8, 1.8);
+  light.position.set(0, LANTERN_HANG_OFFSET_Y + 0.12, 0);
+  return light;
+}
+
 export class SceneManager {
   readonly scene = new THREE.Scene();
 
@@ -43,6 +182,11 @@ export class SceneManager {
   private currentLayout: ZoneLayout | null = null;
   private readonly interactableObjects: THREE.Object3D[] = [];
   private readonly objectsById = new Map<string, THREE.Object3D>();
+  /** Исходный objectId из layout.json — в отличие от userData.objectId на самом
+   *  инстансе, не меняется при подмене модели на разрушенный/наклонённый вариант. */
+  private readonly baseObjectIdByInstance = new Map<string, string>();
+  private readonly animationMixers = new Map<THREE.Object3D, THREE.AnimationMixer>();
+  private readonly staticCollisionCircles: CollisionCircle[] = [];
 
   constructor(
     private readonly assetLoader: AssetLoader,
@@ -50,13 +194,32 @@ export class SceneManager {
   ) {
     this.scene.add(createAmbientFill(), createMoonLight());
     this.scene.fog = createSceneFog();
+    this.loadSkyBackground();
 
     // MISSING сюда не входит — та позиция (spawnPosition) приходит из конкретной
     // задачи смены, а не выводится из одной лишь точки привязки, поэтому её
     // отдельно проставляет Game после ShiftManager.startShift().
     stateMachine.onChange((instanceId, state) => {
-      if (state !== ObjectState.MISSING) this.applyStateVisual(instanceId, state);
+      if (state !== ObjectState.MISSING) this.handleStateChange(instanceId, state);
     });
+  }
+
+  /** Небо — равноугольная (equirectangular) панорама позади модели зоны. Туман не
+   *  затрагивает фон, а купол неба внутри самой модели зоны дизайнер закрасил бы
+   *  целиком, поэтому фон задаём отдельно, кодом (по просьбе дизайнера). Текстуру
+   *  может ещё не подвезти — как и с моделями, отсутствие файла не должно ронять
+   *  игру, просто фон останется чёрным, пока дизайнер не выложит sky_night.jpg. */
+  private loadSkyBackground(): void {
+    new THREE.TextureLoader().load(
+      "textures/sky_night.jpg",
+      (sky) => {
+        sky.mapping = THREE.EquirectangularReflectionMapping;
+        sky.colorSpace = THREE.SRGBColorSpace;
+        this.scene.background = sky;
+      },
+      undefined,
+      (error) => console.warn('[SceneManager] не удалось загрузить "textures/sky_night.jpg"', error),
+    );
   }
 
   async loadZone(layout: ZoneLayout): Promise<void> {
@@ -71,6 +234,14 @@ export class SceneManager {
       enableShadows(zoneScene);
       zoneRoot.add(zoneScene);
       this.staticGeometry = zoneScene;
+      zoneScene.traverse((node) => {
+        if (!(node instanceof THREE.Mesh)) return;
+        if (STATIC_CIRCLE_NAME_PATTERNS.some((p) => p.test(node.name))) {
+          this.staticCollisionCircles.push(computeBoundingCircle(node));
+        } else if (ROCK_MESH_NAME_PATTERN.test(node.name)) {
+          this.staticCollisionCircles.push(...computeIslandCircles(node, ROCK_MIN_COLLISION_RADIUS));
+        }
+      });
     } catch (error) {
       // Контент приходит от дизайнера постепенно — отсутствующая/битая модель зоны
       // не должна ронять весь игровой цикл: оставляем плейсхолдер-землю вместо
@@ -114,8 +285,12 @@ export class SceneManager {
     instance.userData.objectId = placed.objectId;
     instance.userData.interactable = catalogEntry.interactable;
 
+    if (placed.objectId === LANTERN_OBJECT_ID) instance.add(createLanternLight());
+
     parent.add(instance);
     this.objectsById.set(placed.instanceId, instance);
+    this.baseObjectIdByInstance.set(placed.instanceId, placed.objectId);
+    this.startAnimations(instance, gltf.animations);
     if (catalogEntry.interactable) this.interactableObjects.push(instance);
   }
 
@@ -126,8 +301,11 @@ export class SceneManager {
     }
     this.zoneRoot = null;
     this.staticGeometry = null;
+    this.staticCollisionCircles.length = 0;
     this.interactableObjects.length = 0;
     this.objectsById.clear();
+    this.baseObjectIdByInstance.clear();
+    this.animationMixers.clear();
     this.currentZoneId = null;
     this.currentLayout = null;
   }
@@ -136,17 +314,96 @@ export class SceneManager {
     return this.objectsById.get(instanceId);
   }
 
+  /** Исходный objectId из layout.json — в отличие от текущего userData.objectId на
+   *  инстансе, не меняется при подмене модели на разрушенный/наклонённый вариант.
+   *  Использовать для подписей/текста (HUD и т.п.), а не для коллизий/моделей. */
+  getBaseObjectId(instanceId: string): string | undefined {
+    return this.baseObjectIdByInstance.get(instanceId);
+  }
+
+  /** См. fallenLooksBroken — нужен InteractionSystem, чтобы решить, какой текст
+   *  подсказки и какую механику (мгновенно/удержание) показать для FALLEN. */
+  isFallenLikeBroken(instanceId: string): boolean {
+    const baseObjectId = this.baseObjectIdByInstance.get(instanceId);
+    return baseObjectId !== undefined && fallenLooksBroken(baseObjectId);
+  }
+
   /** Исходное место объекта в раскладке зоны (точка привязки у надгробия/вазы). */
   getAnchorTransform(instanceId: string): { position: Vec3; rotationY: number } | null {
     const placed = this.currentLayout?.objects.find((o) => o.instanceId === instanceId);
     return placed ? { position: placed.position, rotationY: placed.rotationY } : null;
   }
 
-  /** Видимое представление состояния объекта — иначе FALLEN/DISPLACED меняют только
-   *  логику (ObjectStateMachine), а на сцене надгробие как ни в чём не бывало стоит
-   *  ровно. FALLEN — завален набок у своего места; DISPLACED — сдвинут в сторону от
-   *  точки привязки; любое другое (прежде всего NORMAL) — ровно на своём месте. */
-  private applyStateVisual(instanceId: string, state: ObjectState): void {
+  private handleStateChange(instanceId: string, state: ObjectState): void {
+    const object = this.objectsById.get(instanceId);
+    const baseObjectId = this.baseObjectIdByInstance.get(instanceId);
+    if (!object || !baseObjectId) return;
+
+    const variantId = VARIANT_MODEL_BY_STATE[baseObjectId]?.[state];
+    const targetModelId = variantId ?? baseObjectId;
+
+    if (targetModelId !== object.userData.objectId) {
+      // Модель-вариант (разбитая/наклонённая) уже сама выглядит как нужное состояние —
+      // ставится точно на точку привязки, без дополнительного геометрического сдвига.
+      void this.setInstanceModel(instanceId, targetModelId);
+    } else if (!variantId) {
+      // Нужная модель уже показана (обычно базовая); для DISPLACED/FALLEN без
+      // предусмотренного варианта — запасной геометрический сдвиг/поворот.
+      this.applyFallbackTransform(instanceId, state);
+    }
+  }
+
+  private async setInstanceModel(instanceId: string, modelObjectId: string): Promise<void> {
+    const current = this.objectsById.get(instanceId);
+    const anchor = this.getAnchorTransform(instanceId);
+    const baseObjectId = this.baseObjectIdByInstance.get(instanceId);
+    if (!current || !anchor || !baseObjectId || !this.zoneRoot) return;
+
+    const catalogEntry = OBJECTS_CATALOG[modelObjectId];
+    if (!catalogEntry) return;
+
+    let gltf;
+    try {
+      gltf = await this.assetLoader.loadModel(catalogEntry.modelPath);
+    } catch (error) {
+      console.warn(`[SceneManager] не удалось загрузить вариант модели "${modelObjectId}"`, error);
+      return;
+    }
+
+    // Пока модель грузилась, зона могла выгрузиться или инстанс — замениться ещё раз;
+    // в обоих случаях этот (устаревший) результат подставлять уже некуда/нечем.
+    if (this.objectsById.get(instanceId) !== current) return;
+
+    const interactable = OBJECTS_CATALOG[baseObjectId]?.interactable ?? false;
+    const next = gltf.scene.clone(true);
+    enableShadows(next);
+    next.position.set(anchor.position.x, anchor.position.y, anchor.position.z);
+    next.rotation.y = THREE.MathUtils.degToRad(anchor.rotationY);
+    next.userData.instanceId = instanceId;
+    next.userData.objectId = modelObjectId;
+    next.userData.interactable = interactable;
+
+    this.zoneRoot.add(next);
+    this.objectsById.set(instanceId, next);
+    this.startAnimations(next, gltf.animations);
+
+    const interactIndex = this.interactableObjects.indexOf(current);
+    if (interactIndex !== -1) {
+      if (interactable) this.interactableObjects[interactIndex] = next;
+      else this.interactableObjects.splice(interactIndex, 1);
+    } else if (interactable) {
+      this.interactableObjects.push(next);
+    }
+
+    this.zoneRoot.remove(current);
+    this.stopAnimations(current);
+    disposeObject(current);
+  }
+
+  /** Запасной визуал для состояний без готовой модели-варианта: FALLEN — завален
+   *  набок у своего места; DISPLACED — сдвинут в сторону от точки привязки;
+   *  остальное (в первую очередь NORMAL) — ровно на своём авторском месте. */
+  private applyFallbackTransform(instanceId: string, state: ObjectState): void {
     const object = this.objectsById.get(instanceId);
     const anchor = this.getAnchorTransform(instanceId);
     if (!object || !anchor) return;
@@ -171,10 +428,25 @@ export class SceneManager {
       return;
     }
 
-    // NORMAL (а также BROKEN/ANOMALY — те видимо отличаются текстурой/моделью,
-    // не трансформом) — объект ровно на своём авторском месте.
     object.position.set(anchor.position.x, anchor.position.y, anchor.position.z);
     object.rotation.set(0, anchorRotationRad, 0);
+  }
+
+  private startAnimations(object: THREE.Object3D, clips: THREE.AnimationClip[]): void {
+    if (clips.length === 0) return;
+    const mixer = new THREE.AnimationMixer(object);
+    for (const clip of clips) mixer.clipAction(clip).play();
+    this.animationMixers.set(object, mixer);
+  }
+
+  private stopAnimations(object: THREE.Object3D): void {
+    this.animationMixers.delete(object);
+  }
+
+  /** Тикает AnimationMixer всех заспавненных объектов со своими клипами (например,
+   *  взмах крыльев у бабочки) — вызывать каждый кадр из Game.update(). */
+  updateAnimations(deltaSec: number): void {
+    for (const mixer of this.animationMixers.values()) mixer.update(deltaSec);
   }
 
   /** Телепортирует уже заспавненный инстанс на новую позицию без смены родителя —
@@ -204,16 +476,24 @@ export class SceneManager {
   }
 
   /** Статическая геометрия зоны (дерево/фонари/ограда и т.п., запечённые в модель
-   *  зоны дизайнером) — для коллизии игрока лучом вперёд по курсу движения. */
+   *  зоны дизайнером) плюс расставленные объекты с collisionMesh в каталоге (дом,
+   *  ворота, забор, скамья — длинные/с проходом, круг им не подходит) — для коллизии
+   *  игрока лучом вперёд по курсу движения. */
   getStaticCollisionMeshes(): THREE.Object3D[] {
-    return this.staticGeometry ? [this.staticGeometry] : [];
+    const meshes: THREE.Object3D[] = this.staticGeometry ? [this.staticGeometry] : [];
+    for (const object of this.objectsById.values()) {
+      const objectId = object.userData.objectId as string | undefined;
+      if (objectId && OBJECTS_CATALOG[objectId]?.collisionMesh) meshes.push(object);
+    }
+    return meshes;
   }
 
   /** Круги-коллайдеры для расставленных непроходимых объектов (надгробия и т.п.,
    *  у которых в каталоге задан collisionRadius) — считается по их текущей,
-   *  а не исходной позиции (DISPLACED/FALLEN/MISSING могут их сдвигать). */
+   *  а не исходной позиции (DISPLACED/FALLEN/MISSING могут их сдвигать), и по
+   *  актуально показанной модели (разбитый вариант может иметь другой радиус). */
   getCollisionCircles(): CollisionCircle[] {
-    const circles: CollisionCircle[] = [];
+    const circles: CollisionCircle[] = [...this.staticCollisionCircles];
     for (const object of this.objectsById.values()) {
       const objectId = object.userData.objectId as string | undefined;
       const radius = objectId ? OBJECTS_CATALOG[objectId]?.collisionRadius : undefined;

@@ -8,6 +8,10 @@ const MOUSE_SENSITIVITY = 0.0025;
 // до уровня глаз, чтобы камера не торчала выше модели персонажа (когда она появится).
 const EYE_HEIGHT = 1.6;
 const PLAYER_RADIUS = 0.35;
+// Высота глаз ловит стволы деревьев/столбы, но пропускает всё, что ниже — бочки,
+// ящики, лавочки, валуны редко выше полуметра. Второй, низкий уровень лучей
+// (относительно камеры) добавляет шанс зацепить и такие объекты тоже.
+const LOW_RAY_HEIGHT_DROP = 1.1;
 
 export class PlayerController {
   private readonly moveInput = new THREE.Vector3();
@@ -110,14 +114,18 @@ export class PlayerController {
       // Один луч точно по курсу движения ловит только то, что прямо по центру —
       // ствол дерева/столб фонаря чуть в стороне от линии движения он бы пропустил
       // (игрок проходил бы в него на часть своего радиуса). Поэтому с запасом
-      // проверяем ещё по лучу слева и справа на ширине PLAYER_RADIUS.
+      // проверяем ещё по лучу слева и справа на ширине PLAYER_RADIUS, и на двух
+      // высотах (глаза + низкий), чтобы не пропускать невысокие препятствия.
       this.tmpPerp.set(-this.tmpDirection.z, 0, this.tmpDirection.x).multiplyScalar(PLAYER_RADIUS);
 
-      for (const sign of [0, 1, -1]) {
-        this.tmpRayOrigin.copy(this.camera.position);
-        if (sign !== 0) this.tmpRayOrigin.addScaledVector(this.tmpPerp, sign);
-        this.raycaster.set(this.tmpRayOrigin, this.tmpDirection);
-        if (this.raycaster.intersectObjects(meshes as THREE.Object3D[], true).length > 0) return true;
+      for (const heightDrop of [0, LOW_RAY_HEIGHT_DROP]) {
+        for (const sign of [0, 1, -1]) {
+          this.tmpRayOrigin.copy(this.camera.position);
+          this.tmpRayOrigin.y -= heightDrop;
+          if (sign !== 0) this.tmpRayOrigin.addScaledVector(this.tmpPerp, sign);
+          this.raycaster.set(this.tmpRayOrigin, this.tmpDirection);
+          if (this.raycaster.intersectObjects(meshes as THREE.Object3D[], true).length > 0) return true;
+        }
       }
     }
 
