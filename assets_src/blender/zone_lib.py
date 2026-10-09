@@ -1209,11 +1209,17 @@ def build_pedestal(M=None):
 
 
 # ============================================================================ атмосфера: за оградой
-# Игровой туман — 5…40 м, цвет (10, 13, 20): всё за ~40 м сливается с небом (sky_texture.py), ближе — тёмные
-# силуэты леса в дымке. Поэтому лес стоит от 22 м, а рельеф за оградой уходит вверх, как котловина.
+# Игровой туман — по умолчанию 5…40 м, цвет (10, 13, 20) (LIGHTING_CONFIG): всё дальше ~40 м сливается с небом
+# (sky_texture.py), ближе — силуэты леса в дымке. Лес идёт слоями до 80 м, на дальних холмах — гребень из
+# деревьев на фоне неба. Деревья разных видов и размеров: ели (высокие/средние/молодые), пихты, лиственные
+# с гранёной кроной, тополя, голые.
 FOREST_FROM = 22.5            # лес начинается за этим расстоянием (по Чебышёву) от центра зоны
-FOREST_TO = 58.0
+FOREST_NEAR_TO = 46.0         # ближняя полоса (подробные деревья); дальше — упрощённые
+FOREST_TO = 80.0
+GRID_HALF, GRID_STEP = 84.0, 4.0
 ROAD_X = lambda y: 0.9 * math.sin(y * 0.06)          # дорога от ворот на юг: ось по x в зависимости от y
+HILLS = ((64.0, -14.0, 30.0, 18.0), (-60.0, 54.0, 27.0, 14.0), (6.0, 72.0, 36.0, 12.0),
+         (-72.0, -30.0, 24.0, 11.0), (46.0, 62.0, 22.0, 9.0))     # дальние холмы: x, y, радиус, высота
 MOON_POS_GLTF = (15.0, 25.0, 10.0)                   # = LIGHTING_CONFIG.moonPosition (src/render/Lighting.ts), координаты glTF
 MOON_COLOR = (0.55, 0.68, 1.0)
 MOON_POWER = 1.0
@@ -1224,9 +1230,12 @@ def _noise2(x, y):
 
 
 def outer_height(x, y):
-    """Рельеф за оградой: у ограды ровно, дальше мягкие холмы (до ~1.7 м к 46 м); у дороги на юге остаётся ровно."""
+    """Рельеф за оградой: у ограды ровно, дальше мягкие холмы (до ~1.7 м к 46 м) и большие дальние холмы (до 18 м);
+    у дороги на юг остаётся ровно."""
     d = max(abs(x), abs(y))
     h = _smooth(22.0, 46.0, d) * (0.4 + 1.3 * _noise2(x, y))
+    for hx, hy, hr, hh in HILLS:
+        h += hh * math.exp(-(((x - hx) ** 2 + (y - hy) ** 2) / hr ** 2) ** 1.0) * (0.85 + 0.3 * _noise2(x * 1.7, y * 1.7))
     if y < -19.0:
         h *= 0.2 + 0.8 * _smooth(3.0, 8.0, abs(x - ROAD_X(y)))
     return h
@@ -1235,21 +1244,21 @@ def outer_height(x, y):
 def _forest_floor(x, y):
     """Цвет земли за оградой (линейный): тёмный мох с пятнами и земляная дорога, уходящая от ворот."""
     n = 0.5 + 0.5 * math.sin(x * 0.7 + y * 0.45) * math.cos(y * 0.6 - x * 0.3)
-    moss = (0.014 + 0.012 * n, 0.024 + 0.014 * n, 0.012 + 0.006 * n)
+    moss = (0.007 + 0.006 * n, 0.013 + 0.007 * n, 0.007 + 0.004 * n)
     if y < -19.0:
         road = 1.0 - _smooth(1.0, 2.2, abs(x - ROAD_X(y)))
-        dirt = (0.046 + 0.01 * n, 0.036 + 0.008 * n, 0.026 + 0.006 * n)
+        dirt = (0.034 + 0.008 * n, 0.026 + 0.006 * n, 0.019 + 0.005 * n)
         return tuple(moss[i] * (1 - road) + dirt[i] * road for i in range(3))
     return moss
 
 
 def build_terrain_outer(M=None):
-    """Земля за оградой: сетка 3 м от −60 до 60 (без внутреннего квадрата), цвета вершин, котловина к краям."""
+    """Земля за оградой: сетка 4 м до ±84 м (без внутреннего квадрата), цвета вершин, котловина и дальние холмы."""
     M = M or mats()
     clear("terrain_outer")
     bm = bmesh.new()
     lay = bm.loops.layers.float_color.new("Color")
-    n, step, lo = 40, 3.0, -60.0
+    n, step, lo = int(2 * GRID_HALF / GRID_STEP), GRID_STEP, -GRID_HALF
     verts = {}
     def vert(i, j):
         if (i, j) not in verts:
@@ -1287,17 +1296,67 @@ def _vc_cone(bm, lay, c, r1, r2, depth, seg, rot, c0, c1):
             lp[lay] = (*col, 1.0)
 
 
-def _spruce(bm, lay, rnd, x, y, z, s):
-    """Ель: тонкий ствол и четыре яруса семигранных конусов (тёмный сине-зелёный), все цвета — вершинами."""
+def _vc_blob(bm, lay, rnd, c, size, c0, c1, sub=1, jitter=0.14):
+    """Гранёный ком (икосаэдр с шумом вершин; size — полуоси) с цветом вершин по высоте — крона лиственного дерева."""
+    mat = Matrix.Translation(c) @ Matrix.Rotation(rnd.random() * 6.28, 4, "Z") @ Matrix.Diagonal((*size, 1.0))
+    res = bmesh.ops.create_icosphere(bm, subdivisions=sub, radius=1.0, matrix=mat)
+    for v in res["verts"]:
+        v.co += Vector((rnd.uniform(-1, 1) * size[0], rnd.uniform(-1, 1) * size[1], rnd.uniform(-1, 1) * size[2])) * jitter
+    for f in _faces_of(res["verts"]):
+        for lp in f.loops:
+            k = min(max((lp.vert.co.z - (c[2] - size[2])) / (2 * size[2]), 0.0), 1.0)
+            col = tuple(c0[i] + (c1[i] - c0[i]) * k for i in range(3))
+            lp[lay] = (*col, 1.0)
+
+
+TRUNK = ((0.018, 0.013, 0.010), (0.026, 0.019, 0.013))
+
+
+def _spruce(bm, lay, rnd, x, y, z, s, tiers=4, seg=7):
+    """Ель: тонкий ствол и tiers ярусов конусов (тёмный сине-зелёный), все цвета — вершинами. 4 яруса — средняя, 5 — высокая."""
     j = rnd.uniform(0.7, 1.3)
-    _vc_cone(bm, lay, (x, y, z + 1.2 * s), 0.30 * s, 0.12 * s, 3.2 * s, 6, rnd.random() * 6.28, (0.018, 0.013, 0.010), (0.024, 0.017, 0.012))
-    for k in range(4):
-        r = (1.75 - 0.38 * k) * s
-        h = 2.8 * s
+    _vc_cone(bm, lay, (x, y, z + 1.2 * s), 0.30 * s, 0.12 * s, 3.2 * s, 6, rnd.random() * 6.28, *TRUNK)
+    k_r = 0.30 if tiers == 4 else 0.24
+    for k in range(tiers):
+        r = ((1.75 if tiers == 4 else 1.55) - k_r * 1.27 * k) * s
+        h = (2.8 if tiers == 4 else 2.6) * s
         jj = j * rnd.uniform(0.9, 1.1)
         lo = (0.010 * jj, 0.024 * jj, 0.024 * jj)
         hi = (0.021 * jj, 0.050 * jj, 0.044 * jj)
-        _vc_cone(bm, lay, (x, y, z + (1.5 + 1.7 * k) * s + h / 2), r, 0.0, h, 7, rnd.random() * 6.28, lo, hi)
+        _vc_cone(bm, lay, (x, y, z + (1.5 + (1.7 if tiers == 4 else 1.55) * k) * s + h / 2), max(r, 0.35 * s), 0.0, h, seg,
+                 rnd.random() * 6.28, lo, hi)
+
+
+def _fir(bm, lay, rnd, x, y, z, s):
+    """Пихта/сосна: толстый ствол, три широких «юбки» — приземистее и шире ели, оливковый оттенок."""
+    j = rnd.uniform(0.75, 1.25)
+    _vc_cone(bm, lay, (x, y, z + 1.8 * s), 0.34 * s, 0.14 * s, 4.4 * s, 6, rnd.random() * 6.28, *TRUNK)
+    for k, (r, h, zz) in enumerate(((2.5, 2.4, 2.0), (1.9, 2.2, 3.5), (1.2, 2.0, 4.9))):
+        lo = (0.016 * j, 0.026 * j, 0.012 * j)
+        hi = (0.030 * j, 0.052 * j, 0.022 * j)
+        _vc_cone(bm, lay, (x, y, z + zz * s + h / 2), r * s, 0.0, h * s, 8, rnd.random() * 6.28, lo, hi)
+
+
+def _leafy(bm, lay, rnd, x, y, z, s):
+    """Лиственное дерево: ствол и крона из трёх-четырёх гранёных комьев (как дуб на переднем плане, но тёмнее)."""
+    j = rnd.uniform(0.75, 1.25)
+    _vc_cone(bm, lay, (x, y, z + 2.2 * s), 0.38 * s, 0.17 * s, 4.8 * s, 6, rnd.random() * 6.28, *TRUNK)
+    cz = z + 5.4 * s
+    for k in range(rnd.choice((3, 4))):
+        a = rnd.random() * 6.28
+        off = Vector((math.cos(a), math.sin(a), 0)) * rnd.uniform(0.0, 1.5) * s
+        size = (rnd.uniform(2.0, 2.8) * s, rnd.uniform(2.0, 2.8) * s, rnd.uniform(1.6, 2.2) * s)
+        lo = (0.014 * j, 0.034 * j, 0.016 * j)
+        hi = (0.030 * j, 0.072 * j, 0.028 * j)
+        _vc_blob(bm, lay, rnd, Vector((x, y, cz + rnd.uniform(-0.6, 0.9) * s)) + off, size, lo, hi)
+
+
+def _poplar(bm, lay, rnd, x, y, z, s):
+    """Тополь/кипарис: узкая высокая вытянутая крона."""
+    j = rnd.uniform(0.8, 1.2)
+    _vc_cone(bm, lay, (x, y, z + 1.0 * s), 0.22 * s, 0.12 * s, 2.6 * s, 6, rnd.random() * 6.28, *TRUNK)
+    _vc_blob(bm, lay, rnd, Vector((x, y, z + 6.2 * s)), (1.05 * s, 1.05 * s, 4.6 * s),
+             (0.012 * j, 0.032 * j, 0.020 * j), (0.026 * j, 0.062 * j, 0.034 * j), sub=2, jitter=0.10)
 
 
 def _bare_tree(bm, lay, rnd, x, y, z, s):
@@ -1316,37 +1375,76 @@ def _bare_tree(bm, lay, rnd, x, y, z, s):
                 lp[lay] = (*lo, 1.0)
 
 
-def build_forest(M=None, count=250, seed=61):
-    """Лес за оградой: ели и голые деревья (Poisson-разброс от 22.5 м до 58 м), на рельефе terrain_outer.
-    Ровный коридор — дорога от ворот на юг. Восемь секторов по азимуту — восемь мешей (отсечение по обзору)."""
+def _pick(rnd, table):
+    r = rnd.random() * sum(w for _, w in table)
+    for kind, w in table:
+        r -= w
+        if r <= 0:
+            return kind
+    return table[-1][0]
+
+
+NEAR_KINDS = (("spruce", 26), ("spruce_tall", 14), ("fir", 14), ("leafy", 20), ("poplar", 8), ("sapling", 10), ("bare", 8))
+FAR_KINDS = (("spruce_tall", 48), ("spruce", 30), ("leafy", 10), ("fir", 12))
+
+
+def _plant(bm, lay, rnd, kind, x, y, z, far):
+    if kind == "spruce":
+        _spruce(bm, lay, rnd, x, y, z, rnd.uniform(0.8, 1.3), 4, 6 if far else 7)
+    elif kind == "spruce_tall":
+        _spruce(bm, lay, rnd, x, y, z, rnd.uniform(1.15, 1.75), 5, 6 if far else 7)
+    elif kind == "sapling":
+        _spruce(bm, lay, rnd, x, y, z, rnd.uniform(0.38, 0.6), 4, 6)
+    elif kind == "fir":
+        _fir(bm, lay, rnd, x, y, z, rnd.uniform(0.85, 1.4))
+    elif kind == "leafy":
+        _leafy(bm, lay, rnd, x, y, z, rnd.uniform(0.8, 1.45))
+    elif kind == "poplar":
+        _poplar(bm, lay, rnd, x, y, z, rnd.uniform(0.85, 1.4))
+    else:
+        _bare_tree(bm, lay, rnd, x, y, z, rnd.uniform(0.9, 1.4))
+
+
+def build_forest(M=None, seed=61):
+    """Лес за оградой: две полосы (ближняя 22.5–46 м — подробная, дальняя 46–80 м — упрощённая) × 8 секторов = 16 мешей
+    (дальние целиком вне теневой камеры луны и отсекаются по обзору). Деревья разных видов и размеров стоят на terrain_outer.
+    Ровный коридор — дорога от ворот на юг."""
     M = M or mats()
-    clear("forest_ring_")
+    clear("forest_")
     rnd = random.Random(seed)
-    bms = [bmesh.new() for _ in range(8)]
-    lays = [b.loops.layers.float_color.new("Color") for b in bms]
+    bms = {(b, s): bmesh.new() for b in range(2) for s in range(8)}
+    lays = {k: bm.loops.layers.float_color.new("Color") for k, bm in bms.items()}
+    cell = 6.0
+    grid = {}
     placed = []
     tries = 0
-    while len(placed) < count and tries < 12000:
+    while tries < 40000 and len(placed) < 620:
         tries += 1
         x, y = rnd.uniform(-FOREST_TO, FOREST_TO), rnd.uniform(-FOREST_TO, FOREST_TO)
-        if max(abs(x), abs(y)) < FOREST_FROM:
+        d = max(abs(x), abs(y))
+        if d < FOREST_FROM:
             continue
         if y < -19.0 and abs(x - ROAD_X(y)) < 4.2:
             continue                                                     # дорога от ворот
-        if any((x - px) ** 2 + (y - py) ** 2 < 4.2 ** 2 for px, py in placed):
+        gap = 4.0 if d < FOREST_NEAR_TO else 5.2
+        gx, gy = int(x // cell), int(y // cell)
+        if any((x - px) ** 2 + (y - py) ** 2 < gap ** 2
+               for i in range(gx - 1, gx + 2) for j in range(gy - 1, gy + 2) for px, py in grid.get((i, j), ())):
             continue
+        grid.setdefault((gx, gy), []).append((x, y))
         placed.append((x, y))
     stats = {"trees": len(placed)}
     for x, y in placed:
-        sec = int(((math.atan2(y, x) + math.pi) / math.tau) * 8) % 8
-        z = outer_height(x, y) - 0.25
-        if rnd.random() < 0.13:
-            _bare_tree(bms[sec], lays[sec], rnd, x, y, z, rnd.uniform(0.9, 1.4))
-        else:
-            _spruce(bms[sec], lays[sec], rnd, x, y, z, rnd.uniform(0.75, 1.3))
-    for k, bm in enumerate(bms):
-        _, t = finish(f"forest_ring_0{k + 1}", bm, [M["foliage"]])
-        stats[f"forest_ring_0{k + 1}"] = t
+        d = max(abs(x), abs(y))
+        far = d >= FOREST_NEAR_TO
+        key = (1 if far else 0, int(((math.atan2(y, x) + math.pi) / math.tau) * 8) % 8)
+        kind = _pick(rnd, FAR_KINDS if far else NEAR_KINDS)
+        _plant(bms[key], lays[key], rnd, kind, x, y, outer_height(x, y) - 0.25, far)
+    for (b, s), bm in bms.items():
+        name = f"forest_{'far' if b else 'near'}_0{s + 1}"
+        _, t = finish(name, bm, [M["foliage"]])
+        stats[name] = t
+    stats["tris"] = sum(v for k, v in stats.items() if k.startswith("forest_"))
     return stats
 
 

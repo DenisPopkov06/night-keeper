@@ -10,6 +10,8 @@
 Системы координат — как в three.js (y вверх). Луна стоит в направлении MOON_POS — это LIGHTING_CONFIG.moonPosition
 из src/render/Lighting.ts, так что свет и диск на небе совпадают; сменили позицию луны — поменяйте здесь и перегенерируйте.
 
+Туман игры, под который нарисован горизонт (LIGHTING_CONFIG): fogColor 0x1c2c4c, fogNear 5, fogFar 62.
+
 Запуск:  blender --background --factory-startup --python assets_src/blender/sky_texture.py
 """
 import math
@@ -28,7 +30,7 @@ OUT = os.path.join(REPO, "public", "textures", "sky_night.jpg")
 W, H = 4096, 2048                      # 0.088° на пиксель
 MOON_POS = (15.0, 25.0, 10.0)          # = LIGHTING_CONFIG.moonPosition
 MOON_R_DEG = 3.6                       # угловой радиус диска (стилизованно крупный: реальная луна ≈ 0.25°)
-FOG_RGB = np.array([10, 13, 20], np.float32) / 255.0   # LIGHTING_CONFIG.fogColor — земля вдали должна сливаться с небом
+FOG_RGB = np.array([28, 44, 76], np.float32) / 255.0   # рекомендуемый LIGHTING_CONFIG.fogColor = 0x1c2c4c: дальний лес тает в дымке неба
 
 
 def rgb(r, g, b):
@@ -99,7 +101,7 @@ def main():
     log = lambda s: print("NK sky:", s, flush=True)
 
     # --- небо: градиент от зенита к горизонту + светлая «подушка» над горизонтом у луны
-    zen, hor = rgb(5, 8, 22), rgb(30, 42, 74)
+    zen, hor = rgb(5, 8, 22), FOG_RGB
     t = np.clip(e_deg / 90.0, 0, 1) ** 0.45
     sky = (zen * t + hor * (1 - t))[:, None, :] * np.ones((1, W, 1), np.float32)       # (H,W,3)
     dl = wrap(lon - moon_lon)[None, :]
@@ -204,9 +206,9 @@ def main():
     far_mask = ZT.sstep(0.06, -0.06, el_row - far_h[None, :])           # 1 — под гребнем дальних холмов
     tree_mask = ZT.sstep(0.05, -0.05, el_row - tree_h[None, :])
     ground_mask = ZT.sstep(0.2, -0.2, el_row)
-    far_col = rgb(13, 19, 32)                                              # дальние холмы чуть светлее ближнего леса (дымка)
+    far_col = rgb(18, 28, 50)                                              # дальние холмы чуть темнее дымки горизонта
     sky = sky * (1 - far_mask[..., None]) + (far_col + glow[..., None] * rgb(14, 18, 28)) * far_mask[..., None]
-    tree_col = rgb(8, 11, 17)
+    tree_col = rgb(12, 18, 32)
     sky = sky * (1 - tree_mask[..., None]) + tree_col * tree_mask[..., None]
     # окошко часовни
     wy = int((0.5 - math.radians(2.7 + 3.0) / np.pi) * H)
