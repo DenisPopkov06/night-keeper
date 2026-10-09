@@ -6,7 +6,10 @@ export class FlashlightSystem {
   private chargePercent = 100;
   private on = false;
 
-  constructor(private readonly drainPerSecond = 2) {
+  constructor(
+    private readonly drainPerSecond = 2,
+    private readonly rechargePerSecond = 1,
+  ) {
     this.light = new THREE.SpotLight(0xfff2cc, 80, 25, Math.PI / 7, 0.4);
     this.light.decay = 1.2;
     this.light.visible = false;
@@ -32,12 +35,18 @@ export class FlashlightSystem {
     this.light.visible = this.on;
   }
 
+  /** Включён — расходует заряд; выключен — медленно восстанавливает (раздел 8 ТЗ:
+   *  "можно либо экономить... либо искать батарейки" — подзаряд не отменяет смысл
+   *  экономии, т.к. вдвое медленнее расхода). */
   update(deltaSec: number): void {
-    if (!this.on) return;
-    this.chargePercent = Math.max(0, this.chargePercent - this.drainPerSecond * deltaSec);
-    if (this.chargePercent === 0) {
-      this.on = false;
-      this.light.visible = false;
+    if (this.on) {
+      this.chargePercent = Math.max(0, this.chargePercent - this.drainPerSecond * deltaSec);
+      if (this.chargePercent === 0) {
+        this.on = false;
+        this.light.visible = false;
+      }
+    } else {
+      this.chargePercent = Math.min(100, this.chargePercent + this.rechargePerSecond * deltaSec);
     }
   }
 
