@@ -8,6 +8,7 @@ const HIGHLIGHT_EMISSIVE = new THREE.Color(0x3a3a1a);
 const HIGHLIGHT_INTENSITY = 0.8;
 const DEFAULT_REPAIR_SEC = 2;
 const PLACEMENT_RADIUS = 2;
+const MAX_INTERACT_DISTANCE = 3.5;
 const CARRY_SPEED_MULTIPLIER = 0.7;
 const CARRY_OFFSET = new THREE.Vector3(0.25, -0.3, -0.8);
 
@@ -44,6 +45,7 @@ export class InteractionSystem {
     }
 
     this.raycaster.setFromCamera(this.centerScreen, this.camera);
+    this.raycaster.far = MAX_INTERACT_DISTANCE;
     const [hit] = this.raycaster.intersectObjects(interactables, true);
     const nextRoot = hit ? this.findInteractableRoot(hit.object, interactables) : null;
 
