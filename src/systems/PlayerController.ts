@@ -1,7 +1,7 @@
 import * as THREE from "three";
 import { InputManager } from "@/core/InputManager";
 import type { Vec3 } from "@/data/types";
-import type { CollisionCircle } from "@/core/SceneManager";
+import type { CollisionCircle, CollisionRect } from "@/core/SceneManager";
 
 const MOUSE_SENSITIVITY = 0.0025;
 // Референсный рост персонажа из раздела 4.1 ТЗ (~1.7м) минус небольшой запас
@@ -83,6 +83,7 @@ export class PlayerController {
     collisionCircles: readonly CollisionCircle[] = [],
     collisionMeshes: readonly THREE.Object3D[] = [],
     raycastExcluded: ReadonlySet<THREE.Object3D> = EMPTY_EXCLUDED,
+    collisionRects: readonly CollisionRect[] = [],
   ): void {
     this.moveInput.set(0, 0, 0);
     if (this.input.isKeyDown("KeyW")) this.moveInput.z -= 1;
@@ -99,7 +100,13 @@ export class PlayerController {
       this.yawOnly.y = this.camera.rotation.y;
       this.moveInput.applyEuler(this.yawOnly);
       this.moveInput.multiplyScalar(this.moveSpeed * speedMultiplier * deltaSec);
-      this.moveWithCollision(this.moveInput, this.activeCircles(collisionCircles), collisionMeshes, raycastExcluded);
+      this.moveWithCollision(
+        this.moveInput,
+        this.activeCircles(collisionCircles),
+        collisionMeshes,
+        raycastExcluded,
+        collisionRects,
+      );
     }
 
     this.updateJump(deltaSec, isSprinting);
@@ -185,12 +192,13 @@ export class PlayerController {
     circles: readonly CollisionCircle[],
     meshes: readonly THREE.Object3D[],
     raycastExcluded: ReadonlySet<THREE.Object3D>,
+    rects: readonly CollisionRect[],
   ): void {
     this.tmpStep.set(step.x, 0, 0);
-    if (!this.isBlocked(this.tmpStep, circles, meshes, raycastExcluded)) this.camera.position.add(this.tmpStep);
+    if (!this.isBlocked(this.tmpStep, circles, meshes, raycastExcluded, rects)) this.camera.position.add(this.tmpStep);
 
     this.tmpStep.set(0, 0, step.z);
-    if (!this.isBlocked(this.tmpStep, circles, meshes, raycastExcluded)) this.camera.position.add(this.tmpStep);
+    if (!this.isBlocked(this.tmpStep, circles, meshes, raycastExcluded, rects)) this.camera.position.add(this.tmpStep);
   }
 
   private isBlocked(
@@ -198,6 +206,7 @@ export class PlayerController {
     circles: readonly CollisionCircle[],
     meshes: readonly THREE.Object3D[],
     raycastExcluded: ReadonlySet<THREE.Object3D>,
+    rects: readonly CollisionRect[],
   ): boolean {
     if (step.x === 0 && step.z === 0) return false;
 
@@ -207,6 +216,17 @@ export class PlayerController {
       const dz = this.tmpNextPos.z - circle.z;
       const minDist = circle.radius + PLAYER_RADIUS;
       if (dx * dx + dz * dz < minDist * minDist) return true;
+    }
+
+    // Прямоугольники (ограда) — ближайшая точка на прямоугольнике к игроку
+    // (клампом координат к его границам), блокирует, если она ближе PLAYER_RADIUS.
+    // Всегда сплошная стена, без vaultable — высоту/прыжок не проверяем.
+    for (const rect of rects) {
+      const nearX = THREE.MathUtils.clamp(this.tmpNextPos.x, rect.minX, rect.maxX);
+      const nearZ = THREE.MathUtils.clamp(this.tmpNextPos.z, rect.minZ, rect.maxZ);
+      const dx = this.tmpNextPos.x - nearX;
+      const dz = this.tmpNextPos.z - nearZ;
+      if (dx * dx + dz * dz < PLAYER_RADIUS * PLAYER_RADIUS) return true;
     }
 
     if (meshes.length > 0) {

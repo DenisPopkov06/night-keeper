@@ -143,6 +143,7 @@ export class Game {
         this.sceneManager.getCollisionCircles(),
         this.sceneManager.getStaticCollisionMeshes(),
         this.sceneManager.getRaycastExcludedMeshes(),
+        this.sceneManager.getCollisionRects(),
       );
       this.flashlight.update(deltaSec);
       this.hintSystem.update(deltaSec);

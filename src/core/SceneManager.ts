@@ -28,6 +28,16 @@ export interface CollisionCircle {
   vaultRequiresSprint?: boolean;
 }
 
+/** Прямоугольник-коллайдер (всегда сплошная стена, не vaultable) — для длинных прямых
+ *  препятствий вроде ограды, которым не подходит ни круг (сильно вытянутый прямоугольник
+ *  вместо круга накрыл бы весь двор), ни луч (см. FENCE_MESH_NAME_PATTERN ниже). */
+export interface CollisionRect {
+  minX: number;
+  maxX: number;
+  minZ: number;
+  maxZ: number;
+}
+
 /** objectId -> состояние -> objectId модели-варианта, которую показать вместо базовой
  *  (разрушенные/наклонённые надгробия по арт-листу дизайнера, см. objects.catalog.ts).
  *  Для комбинаций без варианта (например, DISPLACED у gravestone_slab_a — наклонённого
@@ -95,6 +105,18 @@ const STATIC_CIRCLE_NAME_PATTERNS: { pattern: RegExp; vaultable: boolean; vaultR
   { pattern: /^bench_wood/, vaultable: true, vaultRequiresSprint: true },
   { pattern: /^pedestal_/, vaultable: false },
 ];
+// Ограда (fence_wood_0N, assets_src/blender/zone_lib.py build_fence) — цельный прямой
+// забор по всей стороне зоны, круг под него не подходит (накрыл бы собой весь двор).
+// Раньше ловилась лучом по staticGeometry наравне с остальной геометрией зоны, но лучи
+// идут только на двух строго
+// фиксированных высотах (глаза ~1.6м и низкий ~0.5м — см. PlayerController), а у забора
+// верхняя жердь на z≈1.05-1.2м — ниже уровня глаз, и сама по себе тонкая; нижняя жердь
+// (z≈0.55м) с вероятностью 5% вообще "выпала" (визуальная деталь художника). На стыке
+// этих условий луч на любой высоте иногда проходил мимо всей ограды — через один пролёт
+// можно было пройти, через соседний (где жердь на месте) нет. Прямоугольник по
+// bounding box сегмента не зависит ни от высоты лучей, ни от случайного "выпала": всегда
+// сплошная стена по всей длине.
+const FENCE_MESH_NAME_PATTERN = /^fence_wood_/;
 const ROCK_MESH_NAME_PATTERN = /^rocks_/;
 const ROCK_MIN_COLLISION_RADIUS = 0.4;
 // Валуны радиусом до этого значения — некрупные, обычным прыжком (без спринта)
@@ -117,6 +139,13 @@ function computeBoundingCircle(mesh: THREE.Mesh, vaultable: boolean, vaultRequir
     vaultable,
     ...(vaultRequiresSprint !== undefined && { vaultRequiresSprint }),
   };
+}
+
+function computeBoundingRect(mesh: THREE.Mesh): CollisionRect {
+  mesh.geometry.computeBoundingBox();
+  const box = mesh.geometry.boundingBox?.clone() ?? new THREE.Box3();
+  box.applyMatrix4(mesh.matrixWorld);
+  return { minX: box.min.x, maxX: box.max.x, minZ: box.min.z, maxZ: box.max.z };
 }
 
 /** Разбивает один слитый меш на несвязные "острова" геометрии (например, отдельные
@@ -270,6 +299,7 @@ export class SceneManager {
   private readonly desiredModelByInstance = new Map<string, string>();
   private readonly animationMixers = new Map<THREE.Object3D, THREE.AnimationMixer>();
   private readonly staticCollisionCircles: CollisionCircle[] = [];
+  private readonly staticCollisionRects: CollisionRect[] = [];
   /** Меши из staticGeometry, у которых уже есть свой круг-коллайдер (бочки/ящики/
    *  скамья/валуны) — исключаются из лучевой проверки (getStaticCollisionMeshes
    *  всегда включает staticGeometry целиком), иначе луч по этому же мешу ловит их
@@ -331,7 +361,10 @@ export class SceneManager {
       zoneScene.traverse((node) => {
         if (!(node instanceof THREE.Mesh)) return;
         const staticMatch = STATIC_CIRCLE_NAME_PATTERNS.find((p) => p.pattern.test(node.name));
-        if (staticMatch) {
+        if (FENCE_MESH_NAME_PATTERN.test(node.name)) {
+          this.staticCollisionRects.push(computeBoundingRect(node));
+          this.circleCoveredMeshes.add(node);
+        } else if (staticMatch) {
           this.staticCollisionCircles.push(
             computeBoundingCircle(node, staticMatch.vaultable, staticMatch.vaultRequiresSprint),
           );
@@ -404,6 +437,7 @@ export class SceneManager {
     this.zoneRoot = null;
     this.staticGeometry = null;
     this.staticCollisionCircles.length = 0;
+    this.staticCollisionRects.length = 0;
     this.circleCoveredMeshes.clear();
     this.interactableObjects.length = 0;
     this.objectsById.clear();
@@ -659,5 +693,11 @@ export class SceneManager {
       });
     }
     return circles;
+  }
+
+  /** Прямоугольники-коллайдеры ограды (см. FENCE_MESH_NAME_PATTERN) — считаются один
+   *  раз при загрузке зоны, забор не двигается и не меняет состояние. */
+  getCollisionRects(): readonly CollisionRect[] {
+    return this.staticCollisionRects;
   }
 }
