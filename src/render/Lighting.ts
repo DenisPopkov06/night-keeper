@@ -82,11 +82,20 @@ export function createSceneFog(): THREE.Fog {
 // чётко. При этом надгробия у спавна — на такой же дистанции от камеры, так что
 // просто уменьшить fogNear занесло бы туман и на них. Нужна стена, завязанная не на
 // дистанцию камеры, а на положение в мире — просто за оградой, по всему периметру.
-const FOG_WALL_HALF_EXTENT = 20;
+//
+// Один слой на фиксированном расстоянии давал резкий перепад: внутри поля тумана
+// вообще нет, а прямо на границе он сразу на полной плотности — читается отдельным
+// объектом, а не нарастающей дымкой. Вместо одного слоя — несколько концентрических
+// (radius растёт, opacity растёт): первый ещё перед оградой (но дальше любого
+// расставленного объекта — макс. дистанция до центра среди надгробий/горшков ~16.6м),
+// дальше гуще к настоящей ограде и ещё гуще в поясе ближнего леса — плотность
+// нарастает по мере приближения, а не появляется одним скачком.
 const FOG_WALL_HEIGHT = 9;
-// Было 0.6 — за оградой ещё угадывались силуэты леса сквозь туман. Густой туман
-// должен прятать их почти полностью у земли, а не просвечивать.
-const FOG_WALL_OPACITY = 0.92;
+const FOG_WALL_LAYERS: { radius: number; opacity: number }[] = [
+  { radius: 17.5, opacity: 0.15 },
+  { radius: 19.5, opacity: 0.45 },
+  { radius: 22, opacity: 0.92 },
+];
 // Доля высоты (снизу), где туман держится на полной плотности, прежде чем начать
 // гаснуть к верхнему краю — плотный "ковёр" понизу, а не ровный градиент от самой
 // земли (иначе даже у основания тумана было бы уже заметно светлее).
@@ -98,12 +107,11 @@ function smoothstep(t: number): number {
   return t * t * (3 - 2 * t);
 }
 
-/** Плоскость с вершинным альфа-градиентом: сплошная (FOG_WALL_OPACITY) до
- *  FOG_WALL_FADE_START высоты, дальше плавно (smoothstep, не линейно) гаснет к нулю
- *  у верхнего края — раньше вся плоскость была одной сплошной прозрачностью, и её
- *  верхний край рисовал чёткую прямую линию поперёк неба, читаясь как плоская
- *  "стена", а не туман. */
-function createGradientFadePlane(width: number, height: number, segments: number): THREE.PlaneGeometry {
+/** Плоскость с вершинным альфа-градиентом: сплошная (opacity) до FOG_WALL_FADE_START
+ *  высоты, дальше плавно (smoothstep, не линейно) гаснет к нулю у верхнего края —
+ *  раньше вся плоскость была одной сплошной прозрачностью, и её верхний край рисовал
+ *  чёткую прямую линию поперёк неба, читаясь как плоская "стена", а не туман. */
+function createGradientFadePlane(width: number, height: number, segments: number, opacity: number): THREE.PlaneGeometry {
   const geometry = new THREE.PlaneGeometry(width, height, 1, segments);
   const position = geometry.attributes.position;
   const colors = new Float32Array(position.count * 4);
@@ -117,42 +125,45 @@ function createGradientFadePlane(width: number, height: number, segments: number
       0,
       1,
     );
-    const alpha = FOG_WALL_OPACITY * (1 - smoothstep(fadeT));
+    const alpha = opacity * (1 - smoothstep(fadeT));
     colors.set([1, 1, 1, alpha], i * 4);
   }
   geometry.setAttribute("color", new THREE.BufferAttribute(colors, 4));
   return geometry;
 }
 
-/** Полупрозрачные стены цвета тумана чуть за оградой по всему периметру — скрывают
- *  стык поля и леса в упор, но сами попадают под обычный fog, поэтому издалека (через
- *  открытое поле) сливаются в ту же дымку горизонта. Прозрачность гаснет к верху
- *  вершинным градиентом, а не обрывается ровным краем — иначе это выглядит плоской
- *  преградой, а не туманом. */
+/** Несколько концентрических квадратных "колец" полупрозрачных стен цвета тумана
+ *  вокруг поля (см. комментарий у FOG_WALL_LAYERS) — плотность нарастает по мере
+ *  приближения к границе вместо одного скачка на фиксированной дистанции. Сами
+ *  стены попадают под обычный fog, поэтому издалека (через открытое поле) сливаются
+ *  в ту же дымку горизонта. Прозрачность гаснет к верху вершинным градиентом, а не
+ *  обрывается ровным краем — иначе это выглядит плоской преградой, а не туманом. */
 export function createBoundaryFogWall(): THREE.Group {
   const group = new THREE.Group();
   group.name = "boundary-fog-wall";
 
-  const material = new THREE.MeshBasicMaterial({
-    color: LIGHTING_CONFIG.fogColor,
-    transparent: true,
-    vertexColors: true,
-    side: THREE.DoubleSide,
-    depthWrite: false,
-  });
-  const geometry = createGradientFadePlane(FOG_WALL_HALF_EXTENT * 2, FOG_WALL_HEIGHT, FOG_WALL_SEGMENTS);
+  for (const layer of FOG_WALL_LAYERS) {
+    const material = new THREE.MeshBasicMaterial({
+      color: LIGHTING_CONFIG.fogColor,
+      transparent: true,
+      vertexColors: true,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+    });
+    const geometry = createGradientFadePlane(layer.radius * 2, FOG_WALL_HEIGHT, FOG_WALL_SEGMENTS, layer.opacity);
 
-  const sides = [
-    { x: 0, z: FOG_WALL_HALF_EXTENT, rotationY: 0 },
-    { x: 0, z: -FOG_WALL_HALF_EXTENT, rotationY: 0 },
-    { x: FOG_WALL_HALF_EXTENT, z: 0, rotationY: Math.PI / 2 },
-    { x: -FOG_WALL_HALF_EXTENT, z: 0, rotationY: Math.PI / 2 },
-  ];
-  for (const side of sides) {
-    const plane = new THREE.Mesh(geometry, material);
-    plane.position.set(side.x, FOG_WALL_HEIGHT / 2, side.z);
-    plane.rotation.y = side.rotationY;
-    group.add(plane);
+    const sides = [
+      { x: 0, z: layer.radius, rotationY: 0 },
+      { x: 0, z: -layer.radius, rotationY: 0 },
+      { x: layer.radius, z: 0, rotationY: Math.PI / 2 },
+      { x: -layer.radius, z: 0, rotationY: Math.PI / 2 },
+    ];
+    for (const side of sides) {
+      const plane = new THREE.Mesh(geometry, material);
+      plane.position.set(side.x, FOG_WALL_HEIGHT / 2, side.z);
+      plane.rotation.y = side.rotationY;
+      group.add(plane);
+    }
   }
 
   return group;
