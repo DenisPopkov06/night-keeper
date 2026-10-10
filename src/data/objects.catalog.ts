@@ -77,11 +77,12 @@ function decorMesh(objectId: string): ObjectCatalogEntry {
 }
 
 /** Переносимый мелкий предмет — задачи MISSING(/FALLEN), сквозь него можно пройти. */
-function pickup(objectId: string, states: ObjectState[]): ObjectCatalogEntry {
+function pickup(objectId: string, states: ObjectState[], introducedAtShift?: number): ObjectCatalogEntry {
   return {
     modelPath: `models/props/${objectId}.glb`,
     interactable: true,
     repairableStates: states,
+    ...(introducedAtShift !== undefined && { introducedAtShift }),
   };
 }
 
@@ -155,11 +156,15 @@ export const OBJECTS_CATALOG: Record<string, ObjectCatalogEntry> = {
   // Венки (≈ 0.55 × 0.6 м с листьями, «лицом» к +Z, стоят на хвостах ленты — прислонить
   // к надгробию) и цветы (пучки на земле) — переносимые предметы заданий (раздел 4.2 ТЗ):
   // найти рядом и вернуть на место (MISSING); венок также может просто сдуть (FALLEN).
-  wreath_fresh_a: pickup("wreath_fresh_a", [ObjectState.MISSING, ObjectState.FALLEN]),
-  wreath_flower_a: pickup("wreath_flower_a", [ObjectState.MISSING, ObjectState.FALLEN]),
-  wreath_withered_a: pickup("wreath_withered_a", [ObjectState.MISSING, ObjectState.FALLEN]),
-  flowers_daisy_a: pickup("flowers_daisy_a", [ObjectState.MISSING]),
-  flowers_bluebell_a: pickup("flowers_bluebell_a", [ObjectState.MISSING]),
-  flowers_poppy_a: pickup("flowers_poppy_a", [ObjectState.MISSING]),
+  // introducedAtShift: 5 — новый контент дизайнера, вводится как усложнение уже
+  // после того, как на 4-й смене игра стала тёмной (см. Lighting.ts); сами объекты
+  // стоят в layout.json с первой смены (просто декор кладбища), заданиями становятся
+  // только с 5-й.
+  wreath_fresh_a: pickup("wreath_fresh_a", [ObjectState.MISSING, ObjectState.FALLEN], 5),
+  wreath_flower_a: pickup("wreath_flower_a", [ObjectState.MISSING, ObjectState.FALLEN], 5),
+  wreath_withered_a: pickup("wreath_withered_a", [ObjectState.MISSING, ObjectState.FALLEN], 5),
+  flowers_daisy_a: pickup("flowers_daisy_a", [ObjectState.MISSING], 5),
+  flowers_bluebell_a: pickup("flowers_bluebell_a", [ObjectState.MISSING], 5),
+  flowers_poppy_a: pickup("flowers_poppy_a", [ObjectState.MISSING], 5),
   // ...остальные объекты по мере добавления дизайнером
 };
