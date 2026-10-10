@@ -82,14 +82,25 @@ export function createSceneFog(): THREE.Fog {
 // дистанцию камеры, а на положение в мире — просто за оградой, по всему периметру.
 const FOG_WALL_HALF_EXTENT = 20;
 const FOG_WALL_HEIGHT = 9;
-const FOG_WALL_OPACITY = 0.6;
-// Сегментов по высоте — чтобы вертикальный градиент прозрачности (сплошной у земли,
-// в ноль к верхнему краю) был плавным, а не двумя жёсткими полосами.
-const FOG_WALL_SEGMENTS = 6;
+// Было 0.6 — за оградой ещё угадывались силуэты леса сквозь туман. Густой туман
+// должен прятать их почти полностью у земли, а не просвечивать.
+const FOG_WALL_OPACITY = 0.92;
+// Доля высоты (снизу), где туман держится на полной плотности, прежде чем начать
+// гаснуть к верхнему краю — плотный "ковёр" понизу, а не ровный градиент от самой
+// земли (иначе даже у основания тумана было бы уже заметно светлее).
+const FOG_WALL_FADE_START = 0.35;
+// Сегментов по высоте — чтобы градиент прозрачности был плавным, а не полосами.
+const FOG_WALL_SEGMENTS = 8;
 
-/** Плоскость с вершинным альфа-градиентом (понизу — FOG_WALL_OPACITY, поверху — 0) —
- *  раньше вся плоскость была одной сплошной прозрачностью, и её верхний край рисовал
- *  чёткую прямую линию поперёк неба, читаясь как плоская "стена", а не туман. */
+function smoothstep(t: number): number {
+  return t * t * (3 - 2 * t);
+}
+
+/** Плоскость с вершинным альфа-градиентом: сплошная (FOG_WALL_OPACITY) до
+ *  FOG_WALL_FADE_START высоты, дальше плавно (smoothstep, не линейно) гаснет к нулю
+ *  у верхнего края — раньше вся плоскость была одной сплошной прозрачностью, и её
+ *  верхний край рисовал чёткую прямую линию поперёк неба, читаясь как плоская
+ *  "стена", а не туман. */
 function createGradientFadePlane(width: number, height: number, segments: number): THREE.PlaneGeometry {
   const geometry = new THREE.PlaneGeometry(width, height, 1, segments);
   const position = geometry.attributes.position;
@@ -99,7 +110,12 @@ function createGradientFadePlane(width: number, height: number, segments: number
     // PlaneGeometry идёт от -height/2 (низ) до +height/2 (верх) по локальному Y.
     const localY = position.getY(i);
     const heightFraction = THREE.MathUtils.clamp(localY / height + 0.5, 0, 1);
-    const alpha = FOG_WALL_OPACITY * (1 - heightFraction);
+    const fadeT = THREE.MathUtils.clamp(
+      (heightFraction - FOG_WALL_FADE_START) / (1 - FOG_WALL_FADE_START),
+      0,
+      1,
+    );
+    const alpha = FOG_WALL_OPACITY * (1 - smoothstep(fadeT));
     colors.set([1, 1, 1, alpha], i * 4);
   }
   geometry.setAttribute("color", new THREE.BufferAttribute(colors, 4));
