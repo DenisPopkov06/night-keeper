@@ -176,11 +176,16 @@ function isGravestoneLikeObjectId(objectId: string): boolean {
   return !!entry && entry.repairableStates.length > 0 && entry.collisionRadius !== undefined;
 }
 
-/** Переносимый мелкий предмет заданий (горшок, венок, цветы) — тоже кандидат на
- *  рандомизацию "где он стоит", но отдельной группой от надгробий (другой габарит). */
+/** Переносимый мелкий предмет заданий (горшок, цветы) — тоже кандидат на рандомизацию
+ *  "где он стоит", но отдельной группой от надгробий (другой габарит). Венки сюда
+ *  намеренно не входят — у них позиция/поворот в layout.json совпадают с конкретным
+ *  слотом надгробия (висят на нём), и это должно остаться так после перестановки. */
 function isPickupObjectId(objectId: string): boolean {
   const entry = OBJECTS_CATALOG[objectId];
-  return !!entry && entry.interactable && entry.repairableStates.length > 0 && entry.collisionRadius === undefined;
+  if (!entry || !entry.interactable || entry.repairableStates.length === 0 || entry.collisionRadius !== undefined) {
+    return false;
+  }
+  return !objectId.startsWith("wreath_");
 }
 
 function shuffleInPlace<T>(items: T[]): void {
