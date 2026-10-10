@@ -40,8 +40,9 @@ DISPLAY = {
     "lantern_iron_a": (2.6, -9.0, 1.3), "butterfly_blue_a": (3.8, -9.0, 1.0),
     "wreath_fresh_a": (-1.6, -22.0, 0), "wreath_flower_a": (0.0, -22.0, 0), "wreath_withered_a": (1.6, -22.0, 0),
     "flowers_daisy_a": (-1.6, -24.0, 0), "flowers_bluebell_a": (0.0, -24.0, 0), "flowers_poppy_a": (1.6, -24.0, 0),
+    "zombie_walker_a": (-4.5, -27.0, 0),     # собирает zombie_lib.py (иерархия частей + клип walk)
 }
-ANIMATED = {"butterfly_blue_a"}
+ANIMATED = {"butterfly_blue_a", "zombie_walker_a"}
 # надгробия и ваза запекает bake_props.py (процедурные текстуры → albedo/normal/orm) и сам экспортирует в .glb;
 # здесь они только выложены для просмотра (импорт — import_graves()), в export_all() не входят
 GRAVES = {
