@@ -8,7 +8,9 @@ import {
   createAmbientFill,
   createMoonLight,
   createSceneFog,
+  localLightFactorForShift,
   moonIntensityForShift,
+  skyBackgroundIntensityForShift,
 } from "@/render/Lighting";
 import { createPlaceholderGround } from "@/render/MaterialsLib";
 
@@ -306,11 +308,31 @@ export class SceneManager {
    *  независимо от прыжка и сводит на нет vaultable/vaultRequiresSprint: круг
    *  разрешает перепрыгнуть, а луч по той же геометрии тут же блокирует снова. */
   private readonly circleCoveredMeshes = new Set<THREE.Object3D>();
+  /** Венок → надгробие, у основания которого он стоит (ближайшее на момент загрузки
+   *  зоны, из АВТОРСКОЙ раскладки до любых перемешиваний) + локальный оффсет в его
+   *  осях. Надгробия перемешиваются между собой каждую смену (reshufflePlacedObjects),
+   *  а венки — нет (их "слот" жёстко привязан дизайнером к конкретному месту у
+   *  конкретного камня, см. objects.catalog.ts). Раньше венок оставался в СТАРОМ
+   *  слоте, где после перемешивания мог оказаться совсем другой тип камня (у´же/шире
+   *  исходного) — вплотную-подгонка на 0.14м либо проваливалась внутрь нового камня,
+   *  либо зависала с явным зазором. Теперь венок каждую смену пересчитывается заново
+   *  относительно СВОЕГО камня, где бы тот ни оказался (repositionWreaths). */
+  private readonly wreathAnchors = new Map<
+    string,
+    { gravestoneInstanceId: string; offsetX: number; offsetZ: number; rotationOffset: number }
+  >();
   /** Ссылки нужны, чтобы менять яркость по ходу смен (applyShiftDarkness) —
    *  createAmbientFill()/createMoonLight() добавляются в сцену один раз насовсем,
    *  зона потом грузится/выгружается поверх, без пересоздания света. */
   private readonly ambientLight = createAmbientFill();
   private readonly moonLight = createMoonLight();
+  /** Точечные/направленные светильники зоны — запечённые в zone_*.glb (фонарь на
+   *  столбе, окна/лампа дома) плюс те, что код добавляет сам на размещённые объекты
+   *  (createLanternLight() на lantern_iron_a) — в отличие от ambientLight/moonLight,
+   *  это не глобальный свет, а локальные источники, но они точно так же должны
+   *  гаснуть по ходу смен (applyShiftDarkness), иначе двор у дома/фонаря остаётся
+   *  ярко освещённым независимо от общего затемнения (см. localLightFactorForShift). */
+  private readonly zoneLights: { light: THREE.Light; baseIntensity: number }[] = [];
 
   constructor(
     private readonly assetLoader: AssetLoader,
@@ -358,7 +380,30 @@ export class SceneManager {
       enableShadows(zoneScene);
       zoneRoot.add(zoneScene);
       this.staticGeometry = zoneScene;
+      // GLTFLoader материализует KHR_lights_punctual из зоны как реальные THREE.Light —
+      // в их числе запечённый "moon_light" (DirectionalLight, см. zone_lib.py
+      // build_moon_light): он без теней и существует в .glb для внешних инструментов/
+      // просмотра модели отдельно от игры — игра сама создаёт свой DirectionalLight
+      // с тенями (createMoonLight, Lighting.ts) в то же направление. Если оставить
+      // оба активными, они складываются — и тогда никакое затемнение второго (через
+      // applyShiftDarkness) не притушит общий свет, т.к. первый остаётся на полной
+      // яркости всегда. Отключаем запечённый дубликат; PointLight/SpotLight (фонарь
+      // на столбе, окна/лампа дома) — настоящие локальные светильники, не дубликаты,
+      // их не убираем, а копим в zoneLights, чтобы тоже гасить по ходу смен.
+      // Снимаем дубликаты ПОСЛЕ traverse, а не внутри колбэка: Object3D.traverse
+      // кэширует длину children перед циклом (см. three.core.js), и removeFromParent()
+      // прямо во время обхода сдвигает этот массив — следующий индекс оказывается за
+      // пределами уже укороченного массива, и .traverse() падает на undefined.
+      const duplicateDirectionalLights: THREE.Light[] = [];
       zoneScene.traverse((node) => {
+        if (node instanceof THREE.DirectionalLight) {
+          duplicateDirectionalLights.push(node);
+          return;
+        }
+        if (node instanceof THREE.PointLight || node instanceof THREE.SpotLight) {
+          this.zoneLights.push({ light: node, baseIntensity: node.intensity });
+          return;
+        }
         if (!(node instanceof THREE.Mesh)) return;
         const staticMatch = STATIC_CIRCLE_NAME_PATTERNS.find((p) => p.pattern.test(node.name));
         if (FENCE_MESH_NAME_PATTERN.test(node.name)) {
@@ -376,6 +421,7 @@ export class SceneManager {
           this.circleCoveredMeshes.add(node);
         }
       });
+      for (const light of duplicateDirectionalLights) light.removeFromParent();
     } catch (error) {
       // Контент приходит от дизайнера постепенно — отсутствующая/битая модель зоны
       // не должна ронять весь игровой цикл: оставляем плейсхолдер-землю вместо
@@ -394,6 +440,7 @@ export class SceneManager {
     this.zoneRoot = zoneRoot;
     this.currentZoneId = layout.zoneId;
     this.currentLayout = layout;
+    this.computeWreathAnchors(layout.objects);
   }
 
   private async spawnPlacedObject(placed: PlacedObject, parent: THREE.Group): Promise<void> {
@@ -419,7 +466,11 @@ export class SceneManager {
     instance.userData.objectId = placed.objectId;
     instance.userData.interactable = catalogEntry.interactable;
 
-    if (placed.objectId === LANTERN_OBJECT_ID) instance.add(createLanternLight());
+    if (placed.objectId === LANTERN_OBJECT_ID) {
+      const lanternLight = createLanternLight();
+      instance.add(lanternLight);
+      this.zoneLights.push({ light: lanternLight, baseIntensity: lanternLight.intensity });
+    }
 
     parent.add(instance);
     this.objectsById.set(placed.instanceId, instance);
@@ -439,6 +490,8 @@ export class SceneManager {
     this.staticCollisionCircles.length = 0;
     this.staticCollisionRects.length = 0;
     this.circleCoveredMeshes.clear();
+    this.wreathAnchors.clear();
+    this.zoneLights.length = 0;
     this.interactableObjects.length = 0;
     this.objectsById.clear();
     this.baseObjectIdByInstance.clear();
@@ -482,6 +535,7 @@ export class SceneManager {
     if (!this.currentLayout) return;
     this.shuffleGroupPositions(isGravestoneLikeObjectId);
     this.shuffleGroupPositions(isPickupObjectId);
+    this.repositionWreaths();
   }
 
   /** Постепенное затемнение по сменам (ambientIntensityForShift/moonIntensityForShift —
@@ -490,6 +544,9 @@ export class SceneManager {
   applyShiftDarkness(shiftIndex: number): void {
     this.ambientLight.intensity = ambientIntensityForShift(shiftIndex);
     this.moonLight.intensity = moonIntensityForShift(shiftIndex);
+    const localFactor = localLightFactorForShift(shiftIndex);
+    for (const { light, baseIntensity } of this.zoneLights) light.intensity = baseIntensity * localFactor;
+    this.scene.backgroundIntensity = skyBackgroundIntensityForShift(shiftIndex);
   }
 
   private shuffleGroupPositions(matches: (objectId: string) => boolean): void {
@@ -507,6 +564,70 @@ export class SceneManager {
       instance.position.set(slots[i].position.x, slots[i].position.y, slots[i].position.z);
       instance.rotation.y = THREE.MathUtils.degToRad(slots[i].rotationY);
     });
+  }
+
+  /** Считает для каждого венка ближайшее (на момент загрузки, по авторской раскладке)
+   *  надгробие и локальный оффсет до него (в осях камня) — см. wreathAnchors. */
+  private computeWreathAnchors(objects: readonly PlacedObject[]): void {
+    this.wreathAnchors.clear();
+    const gravestones = objects.filter((o) => isGravestoneLikeObjectId(o.objectId));
+    for (const wreath of objects) {
+      if (!wreath.objectId.startsWith("wreath_")) continue;
+
+      let nearest: PlacedObject | null = null;
+      let nearestDistSq = Infinity;
+      for (const grave of gravestones) {
+        const dx = wreath.position.x - grave.position.x;
+        const dz = wreath.position.z - grave.position.z;
+        const distSq = dx * dx + dz * dz;
+        if (distSq < nearestDistSq) {
+          nearestDistSq = distSq;
+          nearest = grave;
+        }
+      }
+      if (!nearest) continue;
+
+      const dx = wreath.position.x - nearest.position.x;
+      const dz = wreath.position.z - nearest.position.z;
+      const graveRad = THREE.MathUtils.degToRad(nearest.rotationY);
+      const cos = Math.cos(-graveRad);
+      const sin = Math.sin(-graveRad);
+      this.wreathAnchors.set(wreath.instanceId, {
+        gravestoneInstanceId: nearest.instanceId,
+        offsetX: dx * cos - dz * sin,
+        offsetZ: dx * sin + dz * cos,
+        rotationOffset: wreath.rotationY - nearest.rotationY,
+      });
+    }
+  }
+
+  /** Пересчитывает место каждого венка относительно ЕГО камня на новой, только что
+   *  перемешанной позиции (см. wreathAnchors) — вызывать сразу после того, как
+   *  shuffleGroupPositions(isGravestoneLikeObjectId) расставил камни по новым местам. */
+  private repositionWreaths(): void {
+    if (!this.currentLayout) return;
+    const byInstanceId = new Map(this.currentLayout.objects.map((o) => [o.instanceId, o]));
+
+    for (const [wreathInstanceId, anchor] of this.wreathAnchors) {
+      const wreath = byInstanceId.get(wreathInstanceId);
+      const grave = byInstanceId.get(anchor.gravestoneInstanceId);
+      if (!wreath || !grave) continue;
+
+      const graveRad = THREE.MathUtils.degToRad(grave.rotationY);
+      const cos = Math.cos(graveRad);
+      const sin = Math.sin(graveRad);
+      wreath.position = {
+        x: grave.position.x + anchor.offsetX * cos - anchor.offsetZ * sin,
+        y: wreath.position.y,
+        z: grave.position.z + anchor.offsetX * sin + anchor.offsetZ * cos,
+      };
+      wreath.rotationY = grave.rotationY + anchor.rotationOffset;
+
+      const instance = this.objectsById.get(wreathInstanceId);
+      if (!instance) continue;
+      instance.position.set(wreath.position.x, wreath.position.y, wreath.position.z);
+      instance.rotation.y = THREE.MathUtils.degToRad(wreath.rotationY);
+    }
   }
 
   private handleStateChange(instanceId: string, state: ObjectState): void {
@@ -581,8 +702,9 @@ export class SceneManager {
   }
 
   /** Запасной визуал для состояний без готовой модели-варианта: FALLEN — завален
-   *  набок у своего места; DISPLACED — сдвинут в сторону от точки привязки;
-   *  остальное (в первую очередь NORMAL) — ровно на своём авторском месте. */
+   *  набок у своего места (или лёг плашмя — см. fallenLiesFlat); DISPLACED — сдвинут
+   *  в сторону от точки привязки; остальное (в первую очередь NORMAL) — ровно на
+   *  своём авторском месте. */
   private applyFallbackTransform(instanceId: string, state: ObjectState): void {
     const object = this.objectsById.get(instanceId);
     const anchor = this.getAnchorTransform(instanceId);
@@ -593,7 +715,19 @@ export class SceneManager {
     if (state === ObjectState.FALLEN) {
       object.position.set(anchor.position.x, anchor.position.y, anchor.position.z);
       object.rotation.set(0, anchorRotationRad, 0);
-      object.rotateZ(Math.random() < 0.5 ? FALLEN_TILT_RADIANS : -FALLEN_TILT_RADIANS);
+      const baseObjectId = this.baseObjectIdByInstance.get(instanceId);
+      const liesFlat = baseObjectId !== undefined && OBJECTS_CATALOG[baseObjectId]?.fallenLiesFlat;
+      if (liesFlat) {
+        // NORMAL уже стоит вертикально ("на хвостах ленты", лицом к +Z — см.
+        // objects.catalog.ts); рядовой топпл вокруг Z (как у надгробий) оставил бы
+        // его вертикальным, просто повёрнутым на ребро — визуально "висит без опоры".
+        // Вместо этого кладём плашмя поворотом вокруг X, ВСЕГДА в сторону локального
+        // +Z (наружу, от надгробия, к которому он был прислонён), а не в случайную
+        // сторону — иначе на -Z он лёг бы прямо в основание камня.
+        object.rotateX(FALLEN_TILT_RADIANS);
+      } else {
+        object.rotateZ(Math.random() < 0.5 ? FALLEN_TILT_RADIANS : -FALLEN_TILT_RADIANS);
+      }
       return;
     }
 

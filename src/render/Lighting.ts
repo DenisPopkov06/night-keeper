@@ -20,31 +20,60 @@ export const LIGHTING_CONFIG = {
 };
 
 // Постепенное затемнение по сменам (раздел 8 ТЗ смещается в сторону "фонарик не
-// опция, а необходимость"): смена 1 — текущая яркость без изменений, дальше луна
-// и общая подсветка линейно гаснут к минимуму к DARKNESS_RAMP_END_SHIFT и дальше
-// не темнеют. Минимумы не нулевые — совсем без луны/подсветки геометрия тонет в
-// чистый чёрный (нет GI/light-проб, см. createAmbientFill), а не просто "темно".
-// Было 0.18/0.5 — на 4-й смене всё ещё можно было разглядеть дорогу и так;
-// 0.04/0.08 — ориентироваться без фонарика уже реально нельзя, только силуэты.
-const DARKNESS_RAMP_END_SHIFT = 4;
-const MIN_AMBIENT_INTENSITY = 0.04;
-const MIN_MOON_INTENSITY = 0.08;
+// опция, а необходимость"): смена 1 — текущая яркость без изменений, дальше луна,
+// общая подсветка, запечённые в зону точечные светильники (фонарь на столбе, окна и
+// лампа дома — см. SceneManager.zoneLights) и фон неба линейно гаснут к минимуму
+// к DARKNESS_RAMP_END_SHIFT и дальше не темнеют. Минимумы не нулевые — совсем без
+// света геометрия тонет в чистый чёрный (нет GI/light-проб, см. createAmbientFill),
+// а не просто "темно".
+// Было 0.18/0.5, потом 0.04/0.08 с потолком на 4-й смене, потом растянуто до 8-й —
+// по игре на 3-й смене всё ещё прекрасно видно без фонарика (скриншот): ambient/moon
+// трогали, а сами светильники зоны (фонарь у дома и на столбе, окна, бант) горели
+// на полной мощности в любую смену — именно они держали двор освещённым, затемнение
+// луны/подсветки почти не было заметно на их фоне. Теперь: (1) потолок вернули на
+// 5-ю смену, чтобы прогресс не размазывался по восьми уровням, (2) к рампе добавили
+// сами светильники и фон неба, затемняя ВСЁ разом, не только луну/ambient.
+const DARKNESS_RAMP_END_SHIFT = 5;
+const MIN_AMBIENT_INTENSITY = 0.006;
+const MIN_MOON_INTENSITY = 0.012;
+// Запечённые в зону/дом фонари — локальный, а не рассеянный свет: даже сильно
+// притушенные, рядом с ними всё ещё можно что-то разглядеть (огонёк в окне, лампа
+// у крыльца), но на весь двор их уже не хватает, в отличие от исходных 10-65 Вт.
+const MIN_LOCAL_LIGHT_FACTOR = 0.08;
+// Фон неба не гасим до нуля — полностью чёрный квадрат вместо неба читался бы как
+// баг, а не как "очень темно"; этого достаточно, чтобы фон перестал быть источником
+// видимого света и не выдавал силуэты леса/рельефа на контрасте.
+const MIN_SKY_BACKGROUND_INTENSITY = 0.2;
 
 function darknessRampProgress(shiftIndex: number): number {
   return Math.min(1, Math.max(0, (shiftIndex - 1) / (DARKNESS_RAMP_END_SHIFT - 1)));
 }
 
+function rampDown(base: number, min: number, shiftIndex: number): number {
+  const t = darknessRampProgress(shiftIndex);
+  return base - t * (base - min);
+}
+
 /** Интенсивность AmbientLight для конкретной смены — 1-я смена как сейчас,
  *  к 3-4-й линейно темнеет до MIN_AMBIENT_INTENSITY, дальше остаётся минимумом. */
 export function ambientIntensityForShift(shiftIndex: number): number {
-  const t = darknessRampProgress(shiftIndex);
-  return LIGHTING_CONFIG.ambientIntensity - t * (LIGHTING_CONFIG.ambientIntensity - MIN_AMBIENT_INTENSITY);
+  return rampDown(LIGHTING_CONFIG.ambientIntensity, MIN_AMBIENT_INTENSITY, shiftIndex);
 }
 
 /** То же самое для лунного DirectionalLight. */
 export function moonIntensityForShift(shiftIndex: number): number {
-  const t = darknessRampProgress(shiftIndex);
-  return LIGHTING_CONFIG.moonIntensity - t * (LIGHTING_CONFIG.moonIntensity - MIN_MOON_INTENSITY);
+  return rampDown(LIGHTING_CONFIG.moonIntensity, MIN_MOON_INTENSITY, shiftIndex);
+}
+
+/** Множитель (0..1) на БАЗОВУЮ интенсивность запечённых в зону точечных светильников
+ *  (фонарь на столбе, окна/лампа дома) для текущей смены — см. SceneManager.zoneLights. */
+export function localLightFactorForShift(shiftIndex: number): number {
+  return rampDown(1, MIN_LOCAL_LIGHT_FACTOR, shiftIndex);
+}
+
+/** Множитель (0..1) на яркость фона неба (THREE.Scene.backgroundIntensity). */
+export function skyBackgroundIntensityForShift(shiftIndex: number): number {
+  return rampDown(1, MIN_SKY_BACKGROUND_INTENSITY, shiftIndex);
 }
 
 export function createMoonLight(): THREE.DirectionalLight {
