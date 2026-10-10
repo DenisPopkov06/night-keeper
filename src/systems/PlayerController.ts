@@ -14,10 +14,16 @@ const PLAYER_RADIUS = 0.35;
 const LOW_RAY_HEIGHT_DROP = 1.1;
 
 // Прыжок — простая баллистика по высоте камеры, без физдвижка (тот же подход, что и
-// у коллизии). Пик ~1.2м, в воздухе ~0.95с — достаточно заметная дуга (а не "тэп"),
-// при этом перелетает надгробие/бочку/валун с запасом по времени на горизонтальное
-// перемещение, не только по высоте.
+// у коллизии). Два разных прыжка в зависимости от того, зажат ли спринт в момент
+// толчка: обычный — пик ~1.2м, ~0.95с в воздухе, хватает перемахнуть небольшой
+// объект (надгробие/бочку/ящик); с разбега (спринт) — заметно выше и дольше, только
+// так хватает времени и скорости перелететь по-настоящему крупный объект (скамья,
+// валун) — простым прыжком с места их перепрыгнуть по-прежнему нельзя.
 const JUMP_SPEED = 5.2;
+// Было 7.5 (пик ~2.6м) — ощущалось слишком высоко/долго. 6.5 (пик ~1.9м) заметно
+// ниже, но всё ещё с комфортным запасом по времени/скорости перелететь скамью или
+// крупный валун с разбега (6.0 давало слишком узкое окно по таймингу прыжка).
+const RUNNING_JUMP_SPEED = 6.5;
 const GRAVITY = 11;
 // Высота, с которой перешагиваемые (vaultable) круги перестают блокировать — чуть
 // ниже пика прыжка, а не сразу от земли, чтобы отрыв от земли не читерил коллизию.
@@ -26,6 +32,7 @@ const VAULT_CLEAR_HEIGHT = 0.4;
 // приземлился внутри — не мгновенный "телепорт" на границу, а быстрое, но плавное
 // соскальзывание наружу за несколько кадров.
 const PUSH_OUT_SPEED = 5;
+const EMPTY_EXCLUDED: ReadonlySet<THREE.Object3D> = new Set();
 
 export class PlayerController {
   private readonly moveInput = new THREE.Vector3();
@@ -44,6 +51,9 @@ export class PlayerController {
   private groundEyeY = EYE_HEIGHT;
   private jumpHeight = 0;
   private verticalVelocity = 0;
+  // Был ли текущий/последний прыжок "с разбега" (спринт зажат в момент толчка) —
+  // только такой прыжок открывает vaultRequiresSprint-круги (скамья, валуны).
+  private runningJump = false;
 
   constructor(
     private readonly camera: THREE.PerspectiveCamera,
@@ -69,8 +79,10 @@ export class PlayerController {
   update(
     deltaSec: number,
     speedMultiplier = 1,
+    isSprinting = false,
     collisionCircles: readonly CollisionCircle[] = [],
     collisionMeshes: readonly THREE.Object3D[] = [],
+    raycastExcluded: ReadonlySet<THREE.Object3D> = EMPTY_EXCLUDED,
   ): void {
     this.moveInput.set(0, 0, 0);
     if (this.input.isKeyDown("KeyW")) this.moveInput.z -= 1;
@@ -87,10 +99,10 @@ export class PlayerController {
       this.yawOnly.y = this.camera.rotation.y;
       this.moveInput.applyEuler(this.yawOnly);
       this.moveInput.multiplyScalar(this.moveSpeed * speedMultiplier * deltaSec);
-      this.moveWithCollision(this.moveInput, this.activeCircles(collisionCircles), collisionMeshes);
+      this.moveWithCollision(this.moveInput, this.activeCircles(collisionCircles), collisionMeshes, raycastExcluded);
     }
 
-    this.updateJump(deltaSec);
+    this.updateJump(deltaSec, isSprinting);
     // Если прыжок перенёс игрока почти через надгробие/валун/бочку, но высоты не
     // хватило пройти его целиком (приземлился ещё внутри minDist) — выталкиваем
     // наружу, а не оставляем "застрявшим" до следующего прыжка.
@@ -110,9 +122,10 @@ export class PlayerController {
    *  подход, что у коллизии). Только по земле уходит в прыжок — двойной прыжок
    *  в воздухе не даём. moveWithCollision уже отработал XZ этим кадром, так что
    *  camera.position.y можно просто переустановить поверх него. */
-  private updateJump(deltaSec: number): void {
+  private updateJump(deltaSec: number, isSprinting: boolean): void {
     if (this.input.consumeKeyPress("Space") && this.jumpHeight <= 0) {
-      this.verticalVelocity = JUMP_SPEED;
+      this.runningJump = isSprinting;
+      this.verticalVelocity = this.runningJump ? RUNNING_JUMP_SPEED : JUMP_SPEED;
     }
 
     if (this.jumpHeight > 0 || this.verticalVelocity > 0) {
@@ -127,11 +140,14 @@ export class PlayerController {
     this.camera.position.y = this.groundEyeY + this.jumpHeight;
   }
 
-  /** На пике прыжка перешагиваемые (vaultable) круги — надгробия, бочки, ящики,
-   *  валуны — не блокируют; меши (забор/дом/ворота/скамья) и невысокие
-   *  vaultable: false круги (фонарный столб и т.п.) остаются стеной и в прыжке. */
+  /** На пике прыжка перешагиваемые (vaultable) круги — надгробия, бочки, ящики —
+   *  не блокируют; те же, что помечены vaultRequiresSprint (скамья, валуны),
+   *  открываются только прыжком с разбега (this.runningJump). Меши (забор/дом/
+   *  ворота) и невысокие vaultable: false круги (фонарный столб и т.п.) остаются
+   *  стеной всегда. */
   private activeCircles(circles: readonly CollisionCircle[]): readonly CollisionCircle[] {
-    return this.jumpHeight > VAULT_CLEAR_HEIGHT ? circles.filter((c) => !c.vaultable) : circles;
+    if (this.jumpHeight <= VAULT_CLEAR_HEIGHT) return circles;
+    return circles.filter((c) => !c.vaultable || (c.vaultRequiresSprint && !this.runningJump));
   }
 
   /** Выталкивает игрока наружу, если он оказался внутри круга-коллайдера (а не просто
@@ -168,18 +184,20 @@ export class PlayerController {
     step: THREE.Vector3,
     circles: readonly CollisionCircle[],
     meshes: readonly THREE.Object3D[],
+    raycastExcluded: ReadonlySet<THREE.Object3D>,
   ): void {
     this.tmpStep.set(step.x, 0, 0);
-    if (!this.isBlocked(this.tmpStep, circles, meshes)) this.camera.position.add(this.tmpStep);
+    if (!this.isBlocked(this.tmpStep, circles, meshes, raycastExcluded)) this.camera.position.add(this.tmpStep);
 
     this.tmpStep.set(0, 0, step.z);
-    if (!this.isBlocked(this.tmpStep, circles, meshes)) this.camera.position.add(this.tmpStep);
+    if (!this.isBlocked(this.tmpStep, circles, meshes, raycastExcluded)) this.camera.position.add(this.tmpStep);
   }
 
   private isBlocked(
     step: THREE.Vector3,
     circles: readonly CollisionCircle[],
     meshes: readonly THREE.Object3D[],
+    raycastExcluded: ReadonlySet<THREE.Object3D>,
   ): boolean {
     if (step.x === 0 && step.z === 0) return false;
 
@@ -212,7 +230,8 @@ export class PlayerController {
           this.tmpRayOrigin.set(this.camera.position.x, this.groundEyeY - heightDrop, this.camera.position.z);
           if (sign !== 0) this.tmpRayOrigin.addScaledVector(this.tmpPerp, sign);
           this.raycaster.set(this.tmpRayOrigin, this.tmpDirection);
-          if (this.raycaster.intersectObjects(meshes as THREE.Object3D[], true).length > 0) return true;
+          const hits = this.raycaster.intersectObjects(meshes as THREE.Object3D[], true);
+          if (hits.some((hit) => !raycastExcluded.has(hit.object))) return true;
         }
       }
     }

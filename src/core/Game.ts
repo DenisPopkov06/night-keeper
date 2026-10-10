@@ -139,8 +139,10 @@ export class Game {
       this.playerController.update(
         deltaSec,
         this.interaction.getMoveSpeedMultiplier() * sprintMultiplier,
+        this.stamina.isSprinting(),
         this.sceneManager.getCollisionCircles(),
         this.sceneManager.getStaticCollisionMeshes(),
+        this.sceneManager.getRaycastExcludedMeshes(),
       );
       this.flashlight.update(deltaSec);
       this.hintSystem.update(deltaSec);
