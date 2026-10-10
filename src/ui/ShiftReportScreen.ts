@@ -1,4 +1,8 @@
 export interface ShiftReportData {
+  /** Все задачи смены выполнены до того, как кончилось время (ShiftEndReason
+   *  "all_tasks_done") — иначе смена провалена (время вышло раньше), и кнопка ниже
+   *  начинает игру заново с 1-й смены, а не продолжает со следующей (см. Game.onShiftEnd). */
+  won: boolean;
   tasksCompleted: number;
   tasksTotal: number;
   timeSpentSec: number;
@@ -14,9 +18,11 @@ function formatDuration(seconds: number): string {
 
 export class ShiftReportScreen {
   private readonly root: HTMLElement;
+  private readonly titleEl: HTMLElement;
   private readonly tasksEl: HTMLElement;
   private readonly timeEl: HTMLElement;
   private readonly scoreEl: HTMLElement;
+  private readonly nextShiftButton: HTMLButtonElement;
 
   constructor(
     parent: HTMLElement,
@@ -26,9 +32,8 @@ export class ShiftReportScreen {
     this.root.className = "shift-report";
     this.root.style.display = "none";
 
-    const title = document.createElement("h2");
-    title.className = "shift-report__title";
-    title.textContent = "Смена окончена";
+    this.titleEl = document.createElement("h2");
+    this.titleEl.className = "shift-report__title";
 
     this.tasksEl = document.createElement("p");
     this.tasksEl.className = "shift-report__tasks";
@@ -39,19 +44,20 @@ export class ShiftReportScreen {
     this.scoreEl = document.createElement("p");
     this.scoreEl.className = "shift-report__score";
 
-    const nextShiftButton = document.createElement("button");
-    nextShiftButton.className = "shift-report__next";
-    nextShiftButton.textContent = "Следующая смена";
-    nextShiftButton.addEventListener("click", () => this.onNextShift());
+    this.nextShiftButton = document.createElement("button");
+    this.nextShiftButton.className = "shift-report__next";
+    this.nextShiftButton.addEventListener("click", () => this.onNextShift());
 
-    this.root.append(title, this.tasksEl, this.timeEl, this.scoreEl, nextShiftButton);
+    this.root.append(this.titleEl, this.tasksEl, this.timeEl, this.scoreEl, this.nextShiftButton);
     parent.appendChild(this.root);
   }
 
   show(data: ShiftReportData): void {
+    this.titleEl.textContent = data.won ? "Смена окончена" : "Смена провалена";
     this.tasksEl.textContent = `Задачи: ${data.tasksCompleted} / ${data.tasksTotal}`;
     this.timeEl.textContent = `Время: ${formatDuration(data.timeSpentSec)}`;
     this.scoreEl.textContent = `Очки: ${data.score}`;
+    this.nextShiftButton.textContent = data.won ? "Следующая смена" : "Начать заново";
     this.root.style.display = "block";
   }
 

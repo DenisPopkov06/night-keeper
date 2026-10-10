@@ -239,15 +239,25 @@ export class Game {
     this.clock.pause();
     this.interaction.forceDropCarried();
     // Экран итогов смены кликабелен — без этого пришлось бы жать Escape вручную,
-    // чтобы вообще увидеть курсор и нажать "следующая смена".
+    // чтобы вообще увидеть курсор и нажать кнопку на экране итогов.
     this.input.exitPointerLock();
 
     const config = this.shiftManager.getCurrentConfig();
     const shiftIndex = config?.shiftIndex ?? 0;
+    // Смена проиграна, если время вышло, а не все задачи выполнены (all_tasks_done
+    // возможен только когда они все закрыты — см. ShiftManager.handleStateChange).
+    // Раньше currentShiftIndex уже был инкрементирован в startShift() ДО этого
+    // момента и ничем не откатывался при поражении — "следующая смена" на экране
+    // итогов вела на shiftIndex+1, даже если игрок не выполнил задания текущей.
+    // Теперь при поражении откатываем к 1-й смене: игра начинается заново, а не
+    // продолжается с того места, где не вышло уложиться в срок.
+    const won = reason === "all_tasks_done";
+    if (!won) this.currentShiftIndex = 1;
     trackEvent({ name: "shift_end", shiftIndex, reason });
-    void this.persistShiftProgress(shiftIndex);
+    void this.persistShiftProgress(this.currentShiftIndex);
 
     this.shiftReportScreen.show({
+      won,
       tasksCompleted: this.shiftManager.getCompletedCount(),
       tasksTotal: config?.tasks.length ?? 0,
       timeSpentSec: config ? config.timeLimitSec - this.clock.getShiftRemainingSec() : 0,
@@ -257,9 +267,14 @@ export class Game {
     });
   }
 
-  private async persistShiftProgress(completedShiftIndex: number): Promise<void> {
+  /** nextShiftIndex — какая смена начнётся по кнопке на экране итогов (currentShiftIndex
+   *  на момент вызова: следующая по порядку при победе, 1 — после отката при поражении
+   *  в onShiftEnd). Сохраняем его напрямую, а не "завершённая смена + 1" — иначе при
+   *  поражении на экране итогов сохранился бы номер проваленной смены, и возврат в игру
+   *  после перезагрузки страницы начинался бы с неё же, а не с первой. */
+  private async persistShiftProgress(nextShiftIndex: number): Promise<void> {
     const current = await this.saveSystem.load();
-    this.saveSystem.save({ ...current, shiftIndex: completedShiftIndex + 1 });
+    this.saveSystem.save({ ...current, shiftIndex: nextShiftIndex });
   }
 
   private onResize(): void {

@@ -5,7 +5,14 @@ import { ShiftManager } from "@/systems/ShiftManager";
 import { SceneManager } from "@/core/SceneManager";
 
 const HIGHLIGHT_EMISSIVE = new THREE.Color(0x3a3a1a);
-const HIGHLIGHT_INTENSITY = 0.8;
+// Эмиссия складывается с итоговым цветом НАПРЯМУЮ, а не умножается на свет сцены —
+// при 0.8 и прежнем ambient/moon (0.6/1.5) это тонуло в общей яркости, читалось как
+// лёгкая подсветка. После того как смены стали сильно темнее (Lighting.ts,
+// ambient/moon садятся до 0.006/0.012), та же эмиссия — ТЕПЕРЬ самая яркая вещь на
+// экране независимо от освещения смены: объект в фокусе выглядит сплошным плоским
+// пятном без текстуры/теней вместо надгробия. Подсветка не должна перебивать
+// собственное освещение объекта, а лишь слегка подчёркивать его.
+const HIGHLIGHT_INTENSITY = 0.18;
 const DEFAULT_REPAIR_SEC = 2;
 const PLACEMENT_RADIUS = 2;
 const MAX_INTERACT_DISTANCE = 3.5;
