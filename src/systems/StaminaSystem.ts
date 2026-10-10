@@ -12,7 +12,9 @@ export class StaminaSystem {
 
   constructor(
     private readonly drainPerSecond = 25,
-    private readonly rechargePerSecond = 15,
+    // Было 15 — полный запас отрастал обратно меньше чем за 7с, спринт ощущался
+    // почти без ограничений. 6/с — полное восстановление ~16-17с.
+    private readonly rechargePerSecond = 6,
     private readonly recoveryThresholdPercent = 20,
   ) {}
 
