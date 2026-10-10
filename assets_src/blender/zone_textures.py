@@ -279,6 +279,46 @@ def ground_unique():
     return np.clip(col, 0, 1)
 
 
+GRASS_TILE_M = 10.0   # сторона бесшовного тайла травы за оградой, м
+
+
+def tile_grass_outer(n=1024):
+    """Трава за оградой: та же палитра/шум, что и ground_unique внутри (лес начинается далеко за полем, и земля
+    под ним должна читаться как продолжение той же лужайки) — но бесшовный повторяющийся тайл без троп,
+    холмиков у надгробий и подстилки под деревьями (их за оградой нет)."""
+    def tfield(feature_m, seed, beta=2.4):
+        nn = int(np.clip(GRASS_TILE_M / feature_m * 5, 16, n))
+        nn -= nn % 2
+        a = fft_up(pnoise(nn, beta, seed=seed), n)
+        return (a - a.mean()) / (a.std() + 1e-9)
+
+    big, mid, small = tfield(9.0, 201), tfield(3.2, 202), tfield(0.9, 203)
+    fine = pnoise(n, 1.15, seed=204)
+    streak_v = pnoise(n, 1.5, aniso=(1, 6), seed=205)
+    streak_h = pnoise(n, 1.5, aniso=(6, 1), seed=206)
+    pick = n01(tfield(1.5, 207), 0.35)
+    streak = streak_v * pick + streak_h * (1 - pick)
+
+    t = n01(0.65 * mid + 0.35 * big + 0.15 * small, 0.30)
+    col = lerp((0.075, 0.130, 0.055), (0.165, 0.250, 0.085), t)
+    dry = sstep(0.55, 0.80, n01(tfield(7.0, 208), 0.3))[..., None] * 0.55
+    col = col * (1 - dry) + np.array((0.235, 0.220, 0.105)) * dry
+    damp = sstep(0.60, 0.85, n01(tfield(4.5, 209), 0.3))
+    col = col * (1 - 0.18 * damp[..., None])
+    col = col * (1 + 0.09 * fine[..., None] + 0.08 * streak[..., None])
+    height = 0.5 + 0.075 * fine + 0.09 * streak + 0.06 * tfield(0.3, 213)
+
+    soil_m = sstep(0.78, 0.88, n01(0.8 * tfield(2.4, 210) + 0.55 * tfield(0.55, 211), 0.25)) \
+        * (0.4 + 0.3 * n01(tfield(5.0, 215), 0.3))
+    soil = lerp((0.19, 0.135, 0.085), (0.30, 0.215, 0.135), n01(tfield(0.9, 212), 0.3)) * (1 + 0.10 * fine[..., None])
+    col = col * (1 - 0.7 * soil_m[..., None]) + soil * 0.7 * soil_m[..., None]
+    height -= 0.05 * soil_m
+
+    rough = 0.94 - 0.04 * soil_m
+    ao = 0.90 - 0.08 * soil_m - 0.08 * damp
+    return save_set("tile_grass_outer", col, height, rough, ao, 5.5, orm_stride=2, normal_stride=1)
+
+
 def tile_wood(n=512):
     g = pnoise(n, 2.0, aniso=(1, 9), seed=21)             # волокна вдоль V
     fine = pnoise(n, 1.4, aniso=(1.5, 5), seed=22)
@@ -519,10 +559,11 @@ def contact_sheet(parts):
 
 if __name__ == "__main__":
     ground = ground_unique()
+    grass_outer = tile_grass_outer()
     wood_alb, wood_col = tile_wood()
     bark = tile_bark()
     stone = tile_stone()
     v2 = [tile_planks(), tile_shingles(), tile_stone_wall(), tile_cobble(), tile_metal(), tile_leaves(), tile_clay()]
     sign_texture(wood_col)
-    contact_sheet([ground, wood_alb, bark, stone] + v2)
+    contact_sheet([ground, grass_outer, wood_alb, bark, stone] + v2)
     print("NK: done", flush=True)

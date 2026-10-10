@@ -154,6 +154,7 @@ def mats(force=False):
     """Все материалы зоны. Уже созданные переиспользуются (иначе у готовых мешей слетают слоты)."""
     spec = {
         "ground": ("mat_ground_old_cemetery", lambda n: tile_material(n, "ground_old_cemetery")),
+        "grass_outer": ("mat_tile_grass_outer", lambda n: tile_material(n, "tile_grass_outer")),
         "wood": ("mat_tile_wood", lambda n: tile_material(n, "tile_wood")),
         "bark": ("mat_tile_bark", lambda n: tile_material(n, "tile_bark")),
         "stone": ("mat_tile_stone", lambda n: tile_material(n, "tile_stone")),
@@ -1228,14 +1229,15 @@ def build_pedestal(M=None):
 
 
 # ============================================================================ атмосфера: за оградой
-# Игровой туман — по умолчанию 5…40 м, цвет (10, 13, 20) (LIGHTING_CONFIG): всё дальше ~40 м сливается с небом
-# (sky_texture.py), ближе — силуэты леса в дымке. Лес идёт слоями до 80 м, на дальних холмах — гребень из
-# деревьев на фоне неба. Деревья разных видов и размеров: ели (высокие/средние/молодые), пихты, лиственные
-# с гранёной кроной, тополя, голые.
-FOREST_FROM = 22.5            # лес начинается за этим расстоянием (по Чебышёву) от центра зоны
-FOREST_NEAR_TO = 46.0         # ближняя полоса (подробные деревья); дальше — упрощённые
-FOREST_TO = 80.0
-GRID_HALF, GRID_STEP = 84.0, 4.0
+# Игровой туман (LIGHTING_CONFIG, src/render/Lighting.ts): дальше fogFar всё сливается с небом (sky_texture.py).
+# За оградой сперва голое поле (видно траву, которая стала такой же текстурой, что и внутри), и только потом,
+# на отдалении, начинается лес — так дальние деревья читаются дымкой на горизонте, а не стеной у забора.
+# Лес идёт слоями до FOREST_TO, на дальних холмах — гребень из деревьев на фоне неба. Деревья разных видов и
+# размеров: ели (высокие/средние/молодые), пихты, лиственные с гранёной кроной, тополя, голые.
+FOREST_FROM = 42.0             # лес начинается за этим расстоянием (по Чебышёву) от центра зоны
+FOREST_NEAR_TO = 62.0          # ближняя полоса (подробные деревья); дальше — упрощённые
+FOREST_TO = 98.0
+GRID_HALF, GRID_STEP = 104.0, 4.0
 ROAD_X = lambda y: 0.9 * math.sin(y * 0.06)          # дорога от ворот на юг: ось по x в зависимости от y
 HILLS = ((64.0, -14.0, 30.0, 18.0), (-60.0, 54.0, 27.0, 14.0), (6.0, 72.0, 36.0, 12.0),
          (-72.0, -30.0, 24.0, 11.0), (46.0, 62.0, 22.0, 9.0))     # дальние холмы: x, y, радиус, высота
@@ -1261,23 +1263,15 @@ def outer_height(x, y):
     return h
 
 
-def _forest_floor(x, y):
-    """Цвет земли за оградой (линейный): тёмный мох с пятнами и земляная дорога, уходящая от ворот."""
-    n = 0.5 + 0.5 * math.sin(x * 0.7 + y * 0.45) * math.cos(y * 0.6 - x * 0.3)
-    moss = (0.007 + 0.006 * n, 0.013 + 0.007 * n, 0.007 + 0.004 * n)
-    if y < -19.0:
-        road = 1.0 - _smooth(1.0, 2.2, abs(x - ROAD_X(y)))
-        dirt = (0.034 + 0.008 * n, 0.026 + 0.006 * n, 0.019 + 0.005 * n)
-        return tuple(moss[i] * (1 - road) + dirt[i] * road for i in range(3))
-    return moss
+GRASS_TILE_M = 10.0            # сторона тайла mat_tile_grass_outer (см. zone_textures.tile_grass_outer), м
 
 
 def build_terrain_outer(M=None):
-    """Земля за оградой: сетка 4 м до ±84 м (без внутреннего квадрата), цвета вершин, котловина и дальние холмы."""
+    """Земля за оградой: сетка 4 м до ±84 м (без внутреннего квадрата), та же текстура травы, что внутри зоны
+    (mat_tile_grass_outer, тайлится каждые GRASS_TILE_M м), котловина и дальние холмы."""
     M = M or mats()
     clear("terrain_outer")
     bm = bmesh.new()
-    lay = bm.loops.layers.float_color.new("Color")
     n, step, lo = int(2 * GRID_HALF / GRID_STEP), GRID_STEP, -GRID_HALF
     verts = {}
     def vert(i, j):
@@ -1294,13 +1288,14 @@ def build_terrain_outer(M=None):
                 continue
             faces.append(bm.faces.new((vert(i, j), vert(i + 1, j), vert(i + 1, j + 1), vert(i, j + 1))))
     bmesh.ops.recalc_face_normals(bm, faces=faces)
+    uv = bm.loops.layers.uv.verify()
     for f in faces:
         if f.normal.z < 0:
             f.normal_flip()
         for lp in f.loops:
-            c = _forest_floor(lp.vert.co.x, lp.vert.co.y)
-            lp[lay] = (*c, 1.0)
-    _, t = finish("terrain_outer", bm, [M["backdrop"]])
+            x, y, _ = lp.vert.co
+            lp[uv].uv = (x / GRASS_TILE_M, y / GRASS_TILE_M)
+    _, t = finish("terrain_outer", bm, [M["grass_outer"]])
     return {"terrain_outer": t}
 
 
@@ -1445,7 +1440,8 @@ def _plant(bm, lay, rnd, kind, x, y, z, s, far):
 
 
 def build_forest(M=None, seed=61):
-    """Лес за оградой: две полосы (ближняя 22.5–46 м — подробная, дальняя 46–80 м — упрощённая) × 8 секторов = 16 мешей
+    """Лес за оградой: две полосы (ближняя FOREST_FROM–FOREST_NEAR_TO м — подробная, дальняя FOREST_NEAR_TO–FOREST_TO
+    м — упрощённая) × 8 секторов = 16 мешей
     (дальние целиком вне теневой камеры луны и отсекаются по обзору). Деревья разных видов и размеров стоят на terrain_outer.
     Ровный коридор — дорога от ворот на юг."""
     M = M or mats()
@@ -1457,7 +1453,7 @@ def build_forest(M=None, seed=61):
     grid = {}
     placed = []
     tries = 0
-    while tries < 60000 and len(placed) < 520:
+    while tries < 90000 and len(placed) < 700:
         tries += 1
         x, y = rnd.uniform(-FOREST_TO, FOREST_TO), rnd.uniform(-FOREST_TO, FOREST_TO)
         d = max(abs(x), abs(y))
