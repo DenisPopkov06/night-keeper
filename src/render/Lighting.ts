@@ -24,9 +24,11 @@ export const LIGHTING_CONFIG = {
 // и общая подсветка линейно гаснут к минимуму к DARKNESS_RAMP_END_SHIFT и дальше
 // не темнеют. Минимумы не нулевые — совсем без луны/подсветки геометрия тонет в
 // чистый чёрный (нет GI/light-проб, см. createAmbientFill), а не просто "темно".
+// Было 0.18/0.5 — на 4-й смене всё ещё можно было разглядеть дорогу и так;
+// 0.04/0.08 — ориентироваться без фонарика уже реально нельзя, только силуэты.
 const DARKNESS_RAMP_END_SHIFT = 4;
-const MIN_AMBIENT_INTENSITY = 0.18;
-const MIN_MOON_INTENSITY = 0.5;
+const MIN_AMBIENT_INTENSITY = 0.04;
+const MIN_MOON_INTENSITY = 0.08;
 
 function darknessRampProgress(shiftIndex: number): number {
   return Math.min(1, Math.max(0, (shiftIndex - 1) / (DARKNESS_RAMP_END_SHIFT - 1)));
