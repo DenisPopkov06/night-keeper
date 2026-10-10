@@ -52,4 +52,30 @@ describe("getShiftConfig", () => {
     const config = getShiftConfig(5, "old_cemetery", candidates);
     expect(config.tasks).toHaveLength(0);
   });
+
+  it("never picks a wreath/flower task before their introducedAtShift (new content gated by shift)", () => {
+    // wreath_fresh_a/flowers_daisy_a: introducedAtShift: 5 per objects.catalog.ts
+    const candidates = [
+      ...Array.from({ length: 10 }, (_, i) => makeCandidate(`wreath_${i}`, "wreath_fresh_a")),
+      ...Array.from({ length: 10 }, (_, i) => makeCandidate(`flowers_${i}`, "flowers_daisy_a")),
+      ...Array.from({ length: 10 }, (_, i) => makeCandidate(`grave_${i}`, "gravestone_cross_a")),
+    ];
+
+    for (let shiftIndex = 1; shiftIndex <= 4; shiftIndex++) {
+      const config = getShiftConfig(shiftIndex, "old_cemetery", candidates);
+      for (const task of config.tasks) {
+        expect(task.instanceId.startsWith("wreath_") || task.instanceId.startsWith("flowers_")).toBe(false);
+      }
+    }
+  });
+
+  it("allows wreath/flower tasks once their introducedAtShift is reached", () => {
+    const candidates = [
+      ...Array.from({ length: 10 }, (_, i) => makeCandidate(`wreath_${i}`, "wreath_fresh_a")),
+      ...Array.from({ length: 10 }, (_, i) => makeCandidate(`flowers_${i}`, "flowers_daisy_a")),
+    ];
+
+    const config = getShiftConfig(6, "old_cemetery", candidates);
+    expect(config.tasks.length).toBeGreaterThan(0);
+  });
 });

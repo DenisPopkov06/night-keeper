@@ -56,12 +56,13 @@ const GRAVESTONE_STATES = [ObjectState.DISPLACED, ObjectState.FALLEN, ObjectStat
 // дизайнер может поправить под реальные размеры моделей.
 const GRAVESTONE_COLLISION_RADIUS = 0.4;
 
-function decor(objectId: string, collisionRadius?: number): ObjectCatalogEntry {
+function decor(objectId: string, collisionRadius?: number, vaultable?: boolean): ObjectCatalogEntry {
   return {
     modelPath: `models/props/${objectId}.glb`,
     interactable: false,
     repairableStates: [],
     ...(collisionRadius !== undefined && { collisionRadius }),
+    ...(vaultable !== undefined && { vaultable }),
   };
 }
 
@@ -76,11 +77,12 @@ function decorMesh(objectId: string): ObjectCatalogEntry {
 }
 
 /** Переносимый мелкий предмет — задачи MISSING(/FALLEN), сквозь него можно пройти. */
-function pickup(objectId: string, states: ObjectState[]): ObjectCatalogEntry {
+function pickup(objectId: string, states: ObjectState[], introducedAtShift?: number): ObjectCatalogEntry {
   return {
     modelPath: `models/props/${objectId}.glb`,
     interactable: true,
     repairableStates: states,
+    ...(introducedAtShift !== undefined && { introducedAtShift }),
   };
 }
 
@@ -90,18 +92,21 @@ export const OBJECTS_CATALOG: Record<string, ObjectCatalogEntry> = {
     interactable: true,
     repairableStates: GRAVESTONE_STATES,
     collisionRadius: GRAVESTONE_COLLISION_RADIUS,
+    vaultable: true,
   },
   gravestone_arch_a: {
     modelPath: "models/props/gravestone_arch_a.glb",
     interactable: true,
     repairableStates: GRAVESTONE_STATES,
     collisionRadius: GRAVESTONE_COLLISION_RADIUS,
+    vaultable: true,
   },
   gravestone_slab_a: {
     modelPath: "models/props/gravestone_slab_a.glb",
     interactable: true,
     repairableStates: GRAVESTONE_STATES,
     collisionRadius: GRAVESTONE_COLLISION_RADIUS,
+    vaultable: true,
   },
   // pot_clay_a (ниже, среди переносимых) заменил vase_clay_01 — тот же горшок, вторая
   // попытка дизайнера; старую модель из каталога убрал, чтобы на карте не было двух
@@ -125,10 +130,10 @@ export const OBJECTS_CATALOG: Record<string, ObjectCatalogEntry> = {
   fence_wood_a: decorMesh("fence_wood_a"),
   fence_wood_b: decorMesh("fence_wood_b"),
   bench_wood_a: decorMesh("bench_wood_a"),
-  crate_wood_a: decor("crate_wood_a", 0.4),
-  barrel_wood_a: decor("barrel_wood_a", 0.35),
+  crate_wood_a: decor("crate_wood_a", 0.4, true),
+  barrel_wood_a: decor("barrel_wood_a", 0.35, true),
   pedestal_cross_a: decor("pedestal_cross_a", 0.55),
-  rock_mossy_a: decor("rock_mossy_a", 0.8),
+  rock_mossy_a: decor("rock_mossy_a", 0.8, true),
   rock_mossy_b: decor("rock_mossy_b"),
   grass_tuft_a: decor("grass_tuft_a"),
   flowers_wild_a: decor("flowers_wild_a"),
@@ -140,22 +145,26 @@ export const OBJECTS_CATALOG: Record<string, ObjectCatalogEntry> = {
 
   // Варианты надгробий по арт-листу (assets_src/blender/bake_props.py, текстуры запечены): разрушенные —
   // заготовки визуала для BROKEN/FALLEN вместо целого камня; наклонённые — «просевшая земля».
-  gravestone_cross_broken_a: decor("gravestone_cross_broken_a", 0.4),
-  gravestone_slab_broken_a: decor("gravestone_slab_broken_a", 0.6),
-  gravestone_rubble_a: decor("gravestone_rubble_a", 0.45),
-  gravestone_arch_broken_a: decor("gravestone_arch_broken_a", 0.4),
-  gravestone_cross_tilted_a: decor("gravestone_cross_tilted_a", 0.45),
-  gravestone_arch_tilted_a: decor("gravestone_arch_tilted_a", 0.45),
-  gravestone_headstone_tilted_a: decor("gravestone_headstone_tilted_a", 0.45),
+  gravestone_cross_broken_a: decor("gravestone_cross_broken_a", 0.4, true),
+  gravestone_slab_broken_a: decor("gravestone_slab_broken_a", 0.6, true),
+  gravestone_rubble_a: decor("gravestone_rubble_a", 0.45, true),
+  gravestone_arch_broken_a: decor("gravestone_arch_broken_a", 0.4, true),
+  gravestone_cross_tilted_a: decor("gravestone_cross_tilted_a", 0.45, true),
+  gravestone_arch_tilted_a: decor("gravestone_arch_tilted_a", 0.45, true),
+  gravestone_headstone_tilted_a: decor("gravestone_headstone_tilted_a", 0.45, true),
 
   // Венки (≈ 0.55 × 0.6 м с листьями, «лицом» к +Z, стоят на хвостах ленты — прислонить
   // к надгробию) и цветы (пучки на земле) — переносимые предметы заданий (раздел 4.2 ТЗ):
   // найти рядом и вернуть на место (MISSING); венок также может просто сдуть (FALLEN).
-  wreath_fresh_a: pickup("wreath_fresh_a", [ObjectState.MISSING, ObjectState.FALLEN]),
-  wreath_flower_a: pickup("wreath_flower_a", [ObjectState.MISSING, ObjectState.FALLEN]),
-  wreath_withered_a: pickup("wreath_withered_a", [ObjectState.MISSING, ObjectState.FALLEN]),
-  flowers_daisy_a: pickup("flowers_daisy_a", [ObjectState.MISSING]),
-  flowers_bluebell_a: pickup("flowers_bluebell_a", [ObjectState.MISSING]),
-  flowers_poppy_a: pickup("flowers_poppy_a", [ObjectState.MISSING]),
+  // introducedAtShift: 5 — новый контент дизайнера, вводится как усложнение уже
+  // после того, как на 4-й смене игра стала тёмной (см. Lighting.ts); сами объекты
+  // стоят в layout.json с первой смены (просто декор кладбища), заданиями становятся
+  // только с 5-й.
+  wreath_fresh_a: pickup("wreath_fresh_a", [ObjectState.MISSING, ObjectState.FALLEN], 5),
+  wreath_flower_a: pickup("wreath_flower_a", [ObjectState.MISSING, ObjectState.FALLEN], 5),
+  wreath_withered_a: pickup("wreath_withered_a", [ObjectState.MISSING, ObjectState.FALLEN], 5),
+  flowers_daisy_a: pickup("flowers_daisy_a", [ObjectState.MISSING], 5),
+  flowers_bluebell_a: pickup("flowers_bluebell_a", [ObjectState.MISSING], 5),
+  flowers_poppy_a: pickup("flowers_poppy_a", [ObjectState.MISSING], 5),
   // ...остальные объекты по мере добавления дизайнером
 };
