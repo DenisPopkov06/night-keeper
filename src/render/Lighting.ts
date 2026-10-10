@@ -19,6 +19,32 @@ export const LIGHTING_CONFIG = {
   shadowMapSize: 1024,
 };
 
+// Постепенное затемнение по сменам (раздел 8 ТЗ смещается в сторону "фонарик не
+// опция, а необходимость"): смена 1 — текущая яркость без изменений, дальше луна
+// и общая подсветка линейно гаснут к минимуму к DARKNESS_RAMP_END_SHIFT и дальше
+// не темнеют. Минимумы не нулевые — совсем без луны/подсветки геометрия тонет в
+// чистый чёрный (нет GI/light-проб, см. createAmbientFill), а не просто "темно".
+const DARKNESS_RAMP_END_SHIFT = 4;
+const MIN_AMBIENT_INTENSITY = 0.18;
+const MIN_MOON_INTENSITY = 0.5;
+
+function darknessRampProgress(shiftIndex: number): number {
+  return Math.min(1, Math.max(0, (shiftIndex - 1) / (DARKNESS_RAMP_END_SHIFT - 1)));
+}
+
+/** Интенсивность AmbientLight для конкретной смены — 1-я смена как сейчас,
+ *  к 3-4-й линейно темнеет до MIN_AMBIENT_INTENSITY, дальше остаётся минимумом. */
+export function ambientIntensityForShift(shiftIndex: number): number {
+  const t = darknessRampProgress(shiftIndex);
+  return LIGHTING_CONFIG.ambientIntensity - t * (LIGHTING_CONFIG.ambientIntensity - MIN_AMBIENT_INTENSITY);
+}
+
+/** То же самое для лунного DirectionalLight. */
+export function moonIntensityForShift(shiftIndex: number): number {
+  const t = darknessRampProgress(shiftIndex);
+  return LIGHTING_CONFIG.moonIntensity - t * (LIGHTING_CONFIG.moonIntensity - MIN_MOON_INTENSITY);
+}
+
 export function createMoonLight(): THREE.DirectionalLight {
   const light = new THREE.DirectionalLight(LIGHTING_CONFIG.moonColor, LIGHTING_CONFIG.moonIntensity);
   light.position.copy(LIGHTING_CONFIG.moonPosition);

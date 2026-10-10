@@ -3,7 +3,13 @@ import { ObjectState, type ZoneLayout, type PlacedObject, type Vec3 } from "@/da
 import { OBJECTS_CATALOG } from "@/data/objects.catalog";
 import { AssetLoader } from "@/core/AssetLoader";
 import { ObjectStateMachine } from "@/systems/ObjectStateMachine";
-import { createAmbientFill, createMoonLight, createSceneFog } from "@/render/Lighting";
+import {
+  ambientIntensityForShift,
+  createAmbientFill,
+  createMoonLight,
+  createSceneFog,
+  moonIntensityForShift,
+} from "@/render/Lighting";
 import { createPlaceholderGround } from "@/render/MaterialsLib";
 
 const FALLEN_TILT_RADIANS = Math.PI / 2;
@@ -228,12 +234,17 @@ export class SceneManager {
   private readonly desiredModelByInstance = new Map<string, string>();
   private readonly animationMixers = new Map<THREE.Object3D, THREE.AnimationMixer>();
   private readonly staticCollisionCircles: CollisionCircle[] = [];
+  /** Ссылки нужны, чтобы менять яркость по ходу смен (applyShiftDarkness) —
+   *  createAmbientFill()/createMoonLight() добавляются в сцену один раз насовсем,
+   *  зона потом грузится/выгружается поверх, без пересоздания света. */
+  private readonly ambientLight = createAmbientFill();
+  private readonly moonLight = createMoonLight();
 
   constructor(
     private readonly assetLoader: AssetLoader,
     stateMachine: ObjectStateMachine,
   ) {
-    this.scene.add(createAmbientFill(), createMoonLight());
+    this.scene.add(this.ambientLight, this.moonLight);
     this.scene.fog = createSceneFog();
     this.loadSkyBackground();
 
@@ -388,6 +399,14 @@ export class SceneManager {
     if (!this.currentLayout) return;
     this.shuffleGroupPositions(isGravestoneLikeObjectId);
     this.shuffleGroupPositions(isPickupObjectId);
+  }
+
+  /** Постепенное затемнение по сменам (ambientIntensityForShift/moonIntensityForShift —
+   *  см. Lighting.ts): к 3-4-й смене фонарик уже не опция, а необходимость, чтобы
+   *  что-то разглядеть. Вызывать в начале каждой смены. */
+  applyShiftDarkness(shiftIndex: number): void {
+    this.ambientLight.intensity = ambientIntensityForShift(shiftIndex);
+    this.moonLight.intensity = moonIntensityForShift(shiftIndex);
   }
 
   private shuffleGroupPositions(matches: (objectId: string) => boolean): void {

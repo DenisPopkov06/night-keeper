@@ -208,6 +208,7 @@ export class Game {
     // стоит (надгробия между собой, горшки между собой), до того как выбираем
     // задания смены, чтобы они уже ссылались на актуальные позиции.
     this.sceneManager.reshufflePlacedObjects();
+    this.sceneManager.applyShiftDarkness(this.currentShiftIndex);
 
     const config = getShiftConfig(this.currentShiftIndex, layout.zoneId, layout.objects);
     this.shiftManager.startShift(config);
