@@ -6,6 +6,7 @@ import { ObjectStateMachine } from "@/systems/ObjectStateMachine";
 import {
   ambientIntensityForShift,
   createAmbientFill,
+  createBoundaryFogWall,
   createMoonLight,
   createSceneFog,
   moonIntensityForShift,
@@ -244,7 +245,7 @@ export class SceneManager {
     private readonly assetLoader: AssetLoader,
     stateMachine: ObjectStateMachine,
   ) {
-    this.scene.add(this.ambientLight, this.moonLight);
+    this.scene.add(this.ambientLight, this.moonLight, createBoundaryFogWall());
     this.scene.fog = createSceneFog();
     this.loadSkyBackground();
 

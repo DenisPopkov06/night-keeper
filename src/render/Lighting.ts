@@ -72,3 +72,46 @@ export function createAmbientFill(): THREE.AmbientLight {
 export function createSceneFog(): THREE.Fog {
   return new THREE.Fog(LIGHTING_CONFIG.fogColor, LIGHTING_CONFIG.fogNear, LIGHTING_CONFIG.fogFar);
 }
+
+// THREE.Fog — только по дистанции от камеры, поэтому у самой ограды (ZONE=19.5 в
+// assets_src/blender/zone_lib.py) он не спасает: стык голой terrain_outer и первой
+// линии леса (лес начинается только с ~22.5м от центра) при этом всего в паре метров
+// от игрока — ближе fogNear, тумана там почти нет, и граница карты читается слишком
+// чётко. При этом надгробия у спавна — на такой же дистанции от камеры, так что
+// просто уменьшить fogNear занесло бы туман и на них. Нужна стена, завязанная не на
+// дистанцию камеры, а на положение в мире — просто за оградой, по всему периметру.
+const FOG_WALL_HALF_EXTENT = 20;
+const FOG_WALL_HEIGHT = 7;
+const FOG_WALL_OPACITY = 0.55;
+
+/** Полупрозрачные стены цвета тумана чуть за оградой по всему периметру — скрывают
+ *  стык поля и леса в упор, но сами попадают под обычный fog, поэтому издалека (через
+ *  открытое поле) сливаются в ту же дымку горизонта, не выглядят плоской преградой. */
+export function createBoundaryFogWall(): THREE.Group {
+  const group = new THREE.Group();
+  group.name = "boundary-fog-wall";
+
+  const material = new THREE.MeshBasicMaterial({
+    color: LIGHTING_CONFIG.fogColor,
+    transparent: true,
+    opacity: FOG_WALL_OPACITY,
+    side: THREE.DoubleSide,
+    depthWrite: false,
+  });
+  const geometry = new THREE.PlaneGeometry(FOG_WALL_HALF_EXTENT * 2, FOG_WALL_HEIGHT);
+
+  const sides = [
+    { x: 0, z: FOG_WALL_HALF_EXTENT, rotationY: 0 },
+    { x: 0, z: -FOG_WALL_HALF_EXTENT, rotationY: 0 },
+    { x: FOG_WALL_HALF_EXTENT, z: 0, rotationY: Math.PI / 2 },
+    { x: -FOG_WALL_HALF_EXTENT, z: 0, rotationY: Math.PI / 2 },
+  ];
+  for (const side of sides) {
+    const plane = new THREE.Mesh(geometry, material);
+    plane.position.set(side.x, FOG_WALL_HEIGHT / 2, side.z);
+    plane.rotation.y = side.rotationY;
+    group.add(plane);
+  }
+
+  return group;
+}
