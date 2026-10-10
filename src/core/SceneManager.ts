@@ -6,7 +6,6 @@ import { ObjectStateMachine } from "@/systems/ObjectStateMachine";
 import {
   ambientIntensityForShift,
   createAmbientFill,
-  createBoundaryFogWall,
   createMoonLight,
   createSceneFog,
   moonIntensityForShift,
@@ -23,6 +22,10 @@ export interface CollisionCircle {
   /** Невысокое препятствие — прыжком (см. PlayerController) можно перепрыгнуть через
    *  него; для обычной ходьбы по-прежнему блокирует. */
   vaultable: boolean;
+  /** Только для vaultable: true — простым прыжком с места не перепрыгнуть, только
+   *  прыжком с разбега (спринт зажат в момент толчка): скамья, крупные валуны —
+   *  слишком широкие, обычного прыжка не хватает перелететь целиком. */
+  vaultRequiresSprint?: boolean;
 }
 
 /** objectId -> состояние -> objectId модели-варианта, которую показать вместо базовой
@@ -81,26 +84,39 @@ const LANTERN_HANG_OFFSET_Y = -0.68;
 // обе высоты), а bounding box дерева считается по всей кроне — круг получился бы
 // в разы шире реального ствола и сделал бы непроходимой зону, где физически пройти
 // можно (под кроной, в стороне от ствола).
-// vaultable: true только для бочек/ящиков — невысокие, прыжком через них разумно
-// перескочить (как и у надгробий-инстансов, см. objects.catalog.ts). Фонарный столб,
-// скамья и постамент выше/сложнее по силуэту — остаются сплошной стеной и при прыжке.
-const STATIC_CIRCLE_NAME_PATTERNS: { pattern: RegExp; vaultable: boolean }[] = [
+// vaultable: true — можно перепрыгнуть; vaultRequiresSprint — только прыжком с
+// разбега (бочки/ящики — обычным прыжком с места тоже, они невысокие и неширокие;
+// скамья — широкая и длинная, обычного прыжка не хватает её перелететь целиком).
+// Фонарный столб и постамент остаются сплошной стеной в любом случае.
+const STATIC_CIRCLE_NAME_PATTERNS: { pattern: RegExp; vaultable: boolean; vaultRequiresSprint?: boolean }[] = [
   { pattern: /^lamp_post_/, vaultable: false },
   { pattern: /^barrels?_/, vaultable: true },
   { pattern: /^crates?_/, vaultable: true },
-  { pattern: /^bench_wood/, vaultable: false },
+  { pattern: /^bench_wood/, vaultable: true, vaultRequiresSprint: true },
   { pattern: /^pedestal_/, vaultable: false },
 ];
 const ROCK_MESH_NAME_PATTERN = /^rocks_/;
 const ROCK_MIN_COLLISION_RADIUS = 0.4;
+// Валуны радиусом до этого значения — некрупные, обычным прыжком (без спринта)
+// перепрыгиваются; крупнее — только с разбега (vaultRequiresSprint). Было 0.55 —
+// самый маленький реально встречающийся остров геометрии уже ~0.57м (см.
+// assets_src/blender/zone_lib.py build_rocks, крупный камень кластера r 0.55-0.95
+// до масштабирования), так что без спринта не перепрыгивался вообще ни один камень.
+const ROCK_SPRINT_REQUIRED_ABOVE_RADIUS = 0.7;
 
-function computeBoundingCircle(mesh: THREE.Mesh, vaultable: boolean): CollisionCircle {
+function computeBoundingCircle(mesh: THREE.Mesh, vaultable: boolean, vaultRequiresSprint?: boolean): CollisionCircle {
   mesh.geometry.computeBoundingBox();
   const box = mesh.geometry.boundingBox?.clone() ?? new THREE.Box3();
   box.applyMatrix4(mesh.matrixWorld);
   const center = box.getCenter(new THREE.Vector3());
   const size = box.getSize(new THREE.Vector3());
-  return { x: center.x, z: center.z, radius: Math.max(size.x, size.z) / 2, vaultable };
+  return {
+    x: center.x,
+    z: center.z,
+    radius: Math.max(size.x, size.z) / 2,
+    vaultable,
+    ...(vaultRequiresSprint !== undefined && { vaultRequiresSprint }),
+  };
 }
 
 /** Разбивает один слитый меш на несвязные "острова" геометрии (например, отдельные
@@ -108,7 +124,12 @@ function computeBoundingCircle(mesh: THREE.Mesh, vaultable: boolean): CollisionC
  *  делят вершины) и считает bounding-круг для каждого острова отдельно, в мировых
  *  координатах. Группировка — по квантованной позиции вершины (а не по индексу),
  *  чтобы одинаково работать и с indexed-, и с non-indexed-геометрией из экспортера. */
-function computeIslandCircles(mesh: THREE.Mesh, minRadius: number, vaultable: boolean): CollisionCircle[] {
+function computeIslandCircles(
+  mesh: THREE.Mesh,
+  minRadius: number,
+  vaultable: boolean,
+  sprintRequiredAboveRadius?: number,
+): CollisionCircle[] {
   const position = mesh.geometry.attributes.position;
   const index = mesh.geometry.index;
   const triangleCount = (index ? index.count : position.count) / 3;
@@ -162,7 +183,16 @@ function computeIslandCircles(mesh: THREE.Mesh, minRadius: number, vaultable: bo
     const center = box.getCenter(new THREE.Vector3());
     const size = box.getSize(new THREE.Vector3());
     const radius = Math.max(size.x, size.z) / 2;
-    if (radius >= minRadius) circles.push({ x: center.x, z: center.z, radius, vaultable });
+    if (radius >= minRadius) {
+      const vaultRequiresSprint = sprintRequiredAboveRadius !== undefined && radius > sprintRequiredAboveRadius;
+      circles.push({
+        x: center.x,
+        z: center.z,
+        radius,
+        vaultable,
+        ...(vaultRequiresSprint && { vaultRequiresSprint }),
+      });
+    }
   }
   return circles;
 }
@@ -240,6 +270,12 @@ export class SceneManager {
   private readonly desiredModelByInstance = new Map<string, string>();
   private readonly animationMixers = new Map<THREE.Object3D, THREE.AnimationMixer>();
   private readonly staticCollisionCircles: CollisionCircle[] = [];
+  /** Меши из staticGeometry, у которых уже есть свой круг-коллайдер (бочки/ящики/
+   *  скамья/валуны) — исключаются из лучевой проверки (getStaticCollisionMeshes
+   *  всегда включает staticGeometry целиком), иначе луч по этому же мешу ловит их
+   *  независимо от прыжка и сводит на нет vaultable/vaultRequiresSprint: круг
+   *  разрешает перепрыгнуть, а луч по той же геометрии тут же блокирует снова. */
+  private readonly circleCoveredMeshes = new Set<THREE.Object3D>();
   /** Ссылки нужны, чтобы менять яркость по ходу смен (applyShiftDarkness) —
    *  createAmbientFill()/createMoonLight() добавляются в сцену один раз насовсем,
    *  зона потом грузится/выгружается поверх, без пересоздания света. */
@@ -250,7 +286,7 @@ export class SceneManager {
     private readonly assetLoader: AssetLoader,
     stateMachine: ObjectStateMachine,
   ) {
-    this.scene.add(this.ambientLight, this.moonLight, createBoundaryFogWall());
+    this.scene.add(this.ambientLight, this.moonLight);
     this.scene.fog = createSceneFog();
     this.loadSkyBackground();
 
@@ -296,9 +332,15 @@ export class SceneManager {
         if (!(node instanceof THREE.Mesh)) return;
         const staticMatch = STATIC_CIRCLE_NAME_PATTERNS.find((p) => p.pattern.test(node.name));
         if (staticMatch) {
-          this.staticCollisionCircles.push(computeBoundingCircle(node, staticMatch.vaultable));
+          this.staticCollisionCircles.push(
+            computeBoundingCircle(node, staticMatch.vaultable, staticMatch.vaultRequiresSprint),
+          );
+          this.circleCoveredMeshes.add(node);
         } else if (ROCK_MESH_NAME_PATTERN.test(node.name)) {
-          this.staticCollisionCircles.push(...computeIslandCircles(node, ROCK_MIN_COLLISION_RADIUS, true));
+          this.staticCollisionCircles.push(
+            ...computeIslandCircles(node, ROCK_MIN_COLLISION_RADIUS, true, ROCK_SPRINT_REQUIRED_ABOVE_RADIUS),
+          );
+          this.circleCoveredMeshes.add(node);
         }
       });
     } catch (error) {
@@ -362,6 +404,7 @@ export class SceneManager {
     this.zoneRoot = null;
     this.staticGeometry = null;
     this.staticCollisionCircles.length = 0;
+    this.circleCoveredMeshes.clear();
     this.interactableObjects.length = 0;
     this.objectsById.clear();
     this.baseObjectIdByInstance.clear();
@@ -589,6 +632,13 @@ export class SceneManager {
       if (objectId && OBJECTS_CATALOG[objectId]?.collisionMesh) meshes.push(object);
     }
     return meshes;
+  }
+
+  /** Меши из staticGeometry, уже имеющие свой круг-коллайдер — PlayerController
+   *  отбрасывает попадания луча по ним (см. circleCoveredMeshes), чтобы прыжок
+   *  с разбега не наталкивался на ту же геометрию через луч в обход vaultable-круга. */
+  getRaycastExcludedMeshes(): ReadonlySet<THREE.Object3D> {
+    return this.circleCoveredMeshes;
   }
 
   /** Круги-коллайдеры для расставленных непроходимых объектов (надгробия и т.п.,
