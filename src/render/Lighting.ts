@@ -81,12 +81,36 @@ export function createSceneFog(): THREE.Fog {
 // просто уменьшить fogNear занесло бы туман и на них. Нужна стена, завязанная не на
 // дистанцию камеры, а на положение в мире — просто за оградой, по всему периметру.
 const FOG_WALL_HALF_EXTENT = 20;
-const FOG_WALL_HEIGHT = 7;
-const FOG_WALL_OPACITY = 0.55;
+const FOG_WALL_HEIGHT = 9;
+const FOG_WALL_OPACITY = 0.6;
+// Сегментов по высоте — чтобы вертикальный градиент прозрачности (сплошной у земли,
+// в ноль к верхнему краю) был плавным, а не двумя жёсткими полосами.
+const FOG_WALL_SEGMENTS = 6;
+
+/** Плоскость с вершинным альфа-градиентом (понизу — FOG_WALL_OPACITY, поверху — 0) —
+ *  раньше вся плоскость была одной сплошной прозрачностью, и её верхний край рисовал
+ *  чёткую прямую линию поперёк неба, читаясь как плоская "стена", а не туман. */
+function createGradientFadePlane(width: number, height: number, segments: number): THREE.PlaneGeometry {
+  const geometry = new THREE.PlaneGeometry(width, height, 1, segments);
+  const position = geometry.attributes.position;
+  const colors = new Float32Array(position.count * 4);
+
+  for (let i = 0; i < position.count; i++) {
+    // PlaneGeometry идёт от -height/2 (низ) до +height/2 (верх) по локальному Y.
+    const localY = position.getY(i);
+    const heightFraction = THREE.MathUtils.clamp(localY / height + 0.5, 0, 1);
+    const alpha = FOG_WALL_OPACITY * (1 - heightFraction);
+    colors.set([1, 1, 1, alpha], i * 4);
+  }
+  geometry.setAttribute("color", new THREE.BufferAttribute(colors, 4));
+  return geometry;
+}
 
 /** Полупрозрачные стены цвета тумана чуть за оградой по всему периметру — скрывают
  *  стык поля и леса в упор, но сами попадают под обычный fog, поэтому издалека (через
- *  открытое поле) сливаются в ту же дымку горизонта, не выглядят плоской преградой. */
+ *  открытое поле) сливаются в ту же дымку горизонта. Прозрачность гаснет к верху
+ *  вершинным градиентом, а не обрывается ровным краем — иначе это выглядит плоской
+ *  преградой, а не туманом. */
 export function createBoundaryFogWall(): THREE.Group {
   const group = new THREE.Group();
   group.name = "boundary-fog-wall";
@@ -94,11 +118,11 @@ export function createBoundaryFogWall(): THREE.Group {
   const material = new THREE.MeshBasicMaterial({
     color: LIGHTING_CONFIG.fogColor,
     transparent: true,
-    opacity: FOG_WALL_OPACITY,
+    vertexColors: true,
     side: THREE.DoubleSide,
     depthWrite: false,
   });
-  const geometry = new THREE.PlaneGeometry(FOG_WALL_HALF_EXTENT * 2, FOG_WALL_HEIGHT);
+  const geometry = createGradientFadePlane(FOG_WALL_HALF_EXTENT * 2, FOG_WALL_HEIGHT, FOG_WALL_SEGMENTS);
 
   const sides = [
     { x: 0, z: FOG_WALL_HALF_EXTENT, rotationY: 0 },
